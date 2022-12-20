@@ -12,9 +12,9 @@ class AtariConfig(BaseConfig):
         super(AtariConfig, self).__init__(
             training_steps=100000,
             last_steps=20000,
-            test_interval=10000,
+            test_interval=2000, #10000,
             log_interval=1000,
-            vis_interval=1000,
+            vis_interval=100, # 1000,
             test_episodes=32,
             checkpoint_interval=100,
             target_model_interval=200,
@@ -26,7 +26,7 @@ class AtariConfig(BaseConfig):
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
-            batch_size=256,
+            batch_size=64, #256,
             td_steps=5,
             num_actors=1,
             # network initialization/ & normalization
