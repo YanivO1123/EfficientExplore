@@ -73,7 +73,7 @@ class BaseConfig(object):
                  pred_out: int = 256,
                  value_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
                  reward_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
-                 use_uncertainty_architecture: float = False,
+                 use_uncertainty_architecture: bool = False,
                  ):
         """Base Config for EfficietnZero
         Parameters
@@ -192,6 +192,9 @@ class BaseConfig(object):
             support of value to represent the value scalars
         reward_support: DiscreteSupport
             support of reward to represent the reward scalars
+        use_uncertainty_architecture: bool
+            a bool whether to init a regular EffZero network, or a network with ensembles over value prefix and
+            value predictions
         """
         # Self-Play
         self.action_space_size = None

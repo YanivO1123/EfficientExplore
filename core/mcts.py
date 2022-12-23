@@ -24,6 +24,13 @@ class MCTS(object):
         with torch.no_grad():
             model.eval()
 
+            #TODO: I need to add here which roots are exploratory, and which are not.
+            # In principal, I can do x/N environments are exploratory, and the rest are regular
+            # I need to pass 3 variables:
+            #   1. reward_hidden_roots_uncertainties, for which I need to check what is the shape exactly
+            #   2. use_mu_explore: bool. Use muexplore or do everything standard
+            #   3. mu_explore_ratio: what % of the environments are exploratory, and what are exploitatory
+
             # preparation
             num = roots.num
             device = self.config.device
@@ -68,6 +75,7 @@ class MCTS(object):
 
                 last_actions = torch.from_numpy(np.asarray(last_actions)).to(device).unsqueeze(1).long()
 
+                # TODO: Add here accepting the output of ensemble uncertainty from recurrent_inference
                 # evaluation for leaf nodes
                 if self.config.amp_type == 'torch_amp':
                     with autocast():
@@ -96,6 +104,7 @@ class MCTS(object):
                 reward_hidden_h_pool.append(reward_hidden_nodes[1])
                 hidden_state_index_x += 1
 
+                # TODO: add here the uncertainties to the batch_back_propagate
                 # backpropagation along the search path to update the attributes
                 tree.batch_back_propagate(hidden_state_index_x, discount,
                                           value_prefix_pool, value_pool, policy_logits_pool,
