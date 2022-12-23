@@ -12,6 +12,7 @@ from core.mcts import MCTS
 from core.game import GameHistory
 from core.utils import select_action, prepare_observation_lst
 
+import core
 
 @ray.remote(num_gpus=0.25)
 def _test(config, shared_storage):

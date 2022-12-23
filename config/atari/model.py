@@ -591,3 +591,95 @@ class EfficientZeroNet(BaseNet):
         else:
             return proj.detach()
 
+
+#TODO:
+class EfficientExploreNet(EfficientZeroNet):
+    def __init__(self,
+                 observation_shape,
+                 action_space_size,
+                 num_blocks,
+                 num_channels,
+                 reduced_channels_reward,
+                 reduced_channels_value,
+                 reduced_channels_policy,
+                 fc_reward_layers,
+                 fc_value_layers,
+                 fc_policy_layers,
+                 reward_support_size,
+                 value_support_size,
+                 downsample,
+                 inverse_value_transform,
+                 inverse_reward_transform,
+                 lstm_hidden_size,
+                 bn_mt=0.1,
+                 proj_hid=256,
+                 proj_out=256,
+                 pred_hid=64,
+                 pred_out=256,
+                 init_zero=False,
+                 state_norm=False,
+                 ):
+        super(EfficientExploreNet, self).__init__(
+            observation_shape,
+            action_space_size,
+            num_blocks,
+            num_channels,
+            reduced_channels_reward,
+            reduced_channels_value,
+            reduced_channels_policy,
+            fc_reward_layers,
+            fc_value_layers,
+            fc_policy_layers,
+            reward_support_size,
+            value_support_size,
+            downsample,
+            inverse_value_transform,
+            inverse_reward_transform,
+            lstm_hidden_size,
+            bn_mt=bn_mt,
+            proj_hid=proj_hid,
+            proj_out=proj_out,
+            pred_hid=pred_hid,
+            pred_out=pred_out,
+            init_zero=init_zero,
+            state_norm=state_norm)
+
+        #TODO: Add UBE network
+        self.ube_network = NotImplementedError
+
+        raise NotImplementedError
+
+    def ensemble_to_scalar(self, logits_list):
+        """
+            This function takes a list of logits for reward, value or value prefix predictions, and returns a scalar
+            mean of the predictions
+        """
+        assert type(logits_list) is list
+        scalar = 0
+        for logits in logits_list:
+            scalar += self.inverse_value_transform(logits).detach().cpu().numpy()
+        scalar = scalar / len(logits_list)
+        return scalar
+
+    #TODO: Complete the variance computation
+    def ensemble_to_variance(self, logits_list):
+        """
+            This function takes a list of logits for reward, value or value prefix predictions, and returns a scalar
+            variance of the predictions
+        """
+        assert type(logits_list) is list
+
+        return NotImplementedError
+
+    # TODO: Complete the prediction computation with ensembles
+    def prediction(self, encoded_state):
+        return NotImplementedError
+
+    # TODO: Complete the dynamics computation with ensembles
+    def dynamics(self, encoded_state, reward_hidden, action):
+        return NotImplementedError
+
+    # TODO: Complete the UBE prediction computation
+    def ube(self, encoded_state, action):
+        # I need to decide if UBE takes encoded_state or encoded_state and action
+        return NotImplementedError

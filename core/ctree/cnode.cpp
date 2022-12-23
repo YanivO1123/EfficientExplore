@@ -1,5 +1,6 @@
 #include <iostream>
 #include "cnode.h"
+// #include <cmath> // for sqrt
 
 namespace tree{
 
@@ -29,8 +30,19 @@ namespace tree{
         this->to_play = 0;
         this->value_prefix = 0.0;
         this->ptr_node_pool = nullptr;
+
+        /*
+            TODO: Setup the uncertainty variables
+            this->value_prefix_uncertainty = 0.0;
+            this->value_uncertainty_sum = 0.0;
+            this->mu_explore = false;
+        */
     }
 
+    /*
+        TODO: Modify header:
+        CNode::CNode(float prior, int action_num, std::vector<CNode>* ptr_node_pool, bool parent_mu_explore){
+    */
     CNode::CNode(float prior, int action_num, std::vector<CNode>* ptr_node_pool){
         this->prior = prior;
         this->action_num = action_num;
@@ -44,15 +56,32 @@ namespace tree{
         this->ptr_node_pool = ptr_node_pool;
         this->hidden_state_index_x = -1;
         this->hidden_state_index_y = -1;
+
+        /*
+            TODO: Setup the uncertainty variables
+            this->value_prefix_uncertainty = 0.0;
+            this->value_uncertainty_sum = 0.0;
+            this->mu_explore = parent_mu_explore;
+        */
     }
 
     CNode::~CNode(){}
 
+    /*
+        TODO: Add additional expand function:
+        void expand(int to_play, int hidden_state_index_x, int hidden_state_index_y, float value_prefix, const std::vector<float> &policy_logits, float value_prefix_uncertainty);
+        // Alternatively, I can also add default argument float value_prefix_uncertainty = 0
+    */
     void CNode::expand(int to_play, int hidden_state_index_x, int hidden_state_index_y, float value_prefix, const std::vector<float> &policy_logits){
         this->to_play = to_play;
         this->hidden_state_index_x = hidden_state_index_x;
         this->hidden_state_index_y = hidden_state_index_y;
         this->value_prefix = value_prefix;
+
+        /*
+            TODO: Add the uncertainty to the node
+            this->value_prefix_uncertainty = value_prefix_uncertainty;
+        */
 
         int action_num = this->action_num;
         float temp_policy;
@@ -78,6 +107,11 @@ namespace tree{
             int index = ptr_node_pool->size();
             this->children_index.push_back(index);
 
+            /*
+                TODO: Modify CNode function call
+                bool parent_mu_explore = this->mu_explore;
+                ptr_node_pool->push_back(CNode(prior, action_num, ptr_node_pool, parent_mu_explore));
+            */
             ptr_node_pool->push_back(CNode(prior, action_num, ptr_node_pool));
         }
     }
@@ -92,6 +126,14 @@ namespace tree{
             child->prior = prior * (1 - exploration_fraction) + noise * exploration_fraction;
         }
     }
+
+    /*
+        TODO: Add new function get_mean_q_uncertainty:
+        float CNode::get_mean_q_uncertainty(int isRoot, float parent_q, float discount){
+            // Not implemented
+            return mean_q_uncertainty;
+        }
+    */
 
     float CNode::get_mean_q(int isRoot, float parent_q, float discount){
         float total_unsigned_q = 0.0;
@@ -133,6 +175,21 @@ namespace tree{
             return 0;
         }
     }
+
+    /*
+        TODO: Add the value_uncertainty function:
+
+        float CNode::value_uncertainty(){
+            float true_value_uncertainty = 0.0;
+            if(this->visit_count == 0){
+                return true_value_uncertainty;
+            }
+            else{
+                true_value_uncertainty = this->value_uncertainty_sum / this->visit_count;
+                return true_value_uncertainty;
+            }
+        }
+    */
 
     float CNode::value(){
         float true_value = 0.0;
@@ -201,6 +258,19 @@ namespace tree{
 
     CRoots::~CRoots(){}
 
+    /*
+        TODO: Add new function CRoots::prepare_explore
+        void CRoots::prepare_explore(float root_exploration_fraction, const std::vector<std::vector<float>> &noises, const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies, const std::vector<float> &value_prefixs_uncertainty){
+            for(int i = 0; i < this->root_num; ++i){
+            this->roots[i].expand(0, 0, i, value_prefixs[i], policies[i], value_prefixs_uncertainty[i]);
+            // TODO: Do I want to add noise or not?
+            this->roots[i].add_exploration_noise(root_exploration_fraction, noises[i]);
+
+            this->roots[i].visit_count += 1;
+        }
+        }
+    */
+
     void CRoots::prepare(float root_exploration_fraction, const std::vector<std::vector<float>> &noises, const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies){
         for(int i = 0; i < this->root_num; ++i){
             this->roots[i].expand(0, 0, i, value_prefixs[i], policies[i]);
@@ -268,6 +338,14 @@ namespace tree{
                     true_reward = node->value_prefix;
                 }
                 float qsa = true_reward + discount * node->value();
+                /*
+                    TODO: If mu_explore, add the uncertainty term to the min_max_stats.update(qsa):
+                    if (node->mu_explore){
+                        float value_uncertainty = node->value_prefix_uncertainty + discount * discount * node->value_uncertainty();
+                        value_uncertainty = sqrt(abs(value_uncertainty));
+                        qsa = qsa + node->beta * value_uncertainty;
+                    }
+                */
                 min_max_stats.update(qsa);
             }
 
@@ -367,6 +445,27 @@ namespace tree{
             }
             value_score = true_reward + discount * child->value();
         }
+
+        /*
+            TODO: Add the uncertainty to the value score:
+
+            if (child->) {
+                if (child->visit_count == 0){
+                    value_uncertainty_score = parent_mean_q_uncertainty;
+                }
+                else {
+                    float true_reward_uncertainty = child->value_prefix_uncertainty;    // As this is computed with ensemble, this is always the "true" true_reward_uncertainty
+                    value_uncertainty_score = true_reward_uncertainty + discount * discount * child->value_uncertainty();
+                }
+                value_uncertainty_score = abs(value_uncertainty_score);  // To make sure that the argument is positive
+                value_uncertainty_score = sqrt(value_uncertainty_score);
+                value_score = value_score + child->beta * value_uncertainty_score;
+
+                ucb_value = min_max_stats.normalize(value_score);
+
+                return ucb_value;
+            }
+        */
 
         value_score = min_max_stats.normalize(value_score);
 

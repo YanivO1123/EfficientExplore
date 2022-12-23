@@ -278,6 +278,7 @@ class DataWorker(object):
                     value_prefix_pool = network_output.value_prefix
                     policy_logits_pool = network_output.policy_logits.tolist()
 
+                    #TODO: This function does the MCTS. I should pass that one is exploit and the rest are explore
                     roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations)
                     noises = [np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(np.float32).tolist() for _ in range(env_nums)]
                     roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool, policy_logits_pool)
@@ -287,6 +288,9 @@ class DataWorker(object):
                     roots_distributions = roots.get_distributions()
                     roots_values = roots.get_values()
                     for i in range(env_nums):
+                        #TODO: Based on i, I can decide if this is an exploration or exploitation episode,
+                        # for action selection
+
                         deterministic = False
                         if start_training:
                             distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]

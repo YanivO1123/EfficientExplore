@@ -17,6 +17,8 @@ from core.storage import SharedStorage, QueueStorage
 from core.selfplay_worker import DataWorker
 from core.reanalyze_worker import BatchWorker_GPU, BatchWorker_CPU
 
+import core
+
 
 def consist_loss_func(f1, f2):
     """Consistency loss function: similarity loss

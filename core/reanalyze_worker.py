@@ -40,6 +40,10 @@ class BatchWorker_CPU(object):
         self.batch_max_num = 20
         self.beta_schedule = LinearSchedule(config.training_steps + config.last_steps, initial_p=config.priority_prob_beta, final_p=1.0)
 
+    # TODO: Complete the UBE context preparation
+    def _prepare_ube_context(self, indices, games, state_index_lst, total_transitions):
+        return NotImplementedError
+
     def _prepare_reward_value_context(self, indices, games, state_index_lst, total_transitions):
         """prepare the context of rewards and values for reanalyzing part
         Parameters
@@ -224,6 +228,9 @@ class BatchWorker_CPU(object):
         else:
             policy_non_re_context = None
 
+        # TODO: Compute ube context with self._prepare_ube_context
+
+        # TODO: Change context structure to pass UBE context
         countext = reward_value_context, policy_re_context, policy_non_re_context, inputs_batch, weights
         self.mcts_storage.push(countext)
 
@@ -294,6 +301,13 @@ class BatchWorker_GPU(object):
         self.batch_storage = batch_storage
 
         self.last_model_index = 0
+
+    #TODO: Complete the target generation for UBE
+    def _prepare_ube(self, ube_context):
+        """
+            Takes a UBE context, and returns batch of UBE targets
+        """
+        return NotImplementedError
 
     def _prepare_reward_value(self, reward_value_context):
         """prepare reward and value targets from the context of rewards and values

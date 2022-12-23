@@ -130,7 +130,6 @@ class BaseNet(nn.Module):
             if g is not None:
                 p.grad = torch.from_numpy(g)
 
-
 def renormalize(tensor, first_dim=1):
     # normalize the tensor (states)
     if first_dim < 0:
@@ -141,3 +140,4 @@ def renormalize(tensor, first_dim=1):
     flat_tensor = (flat_tensor - min) / (max - min)
 
     return flat_tensor.view(*tensor.shape)
+

@@ -72,7 +72,9 @@ class BaseConfig(object):
                  pred_hid: int = 64,
                  pred_out: int = 256,
                  value_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
-                 reward_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1)):
+                 reward_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
+                 use_uncertainty_architecture: float = False,
+                 ):
         """Base Config for EfficietnZero
         Parameters
         ----------
@@ -283,6 +285,9 @@ class BaseConfig(object):
         self.proj_out = proj_out
         self.pred_hid = pred_hid
         self.pred_out = pred_out
+
+        # uncertainty
+        self.use_uncertainty_architecture = use_uncertainty_architecture
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError

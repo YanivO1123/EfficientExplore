@@ -59,6 +59,8 @@ class GameHistory:
         self.obs_history = []
         self.rewards = []
 
+        # TODO: Add variables for saving uncertainty
+
     def init(self, init_observations):
         """Initialize a history block, stack the previous stacked_observations frames.
         Parameters

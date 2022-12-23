@@ -19,13 +19,27 @@ namespace tree {
         public:
             int visit_count, to_play, action_num, hidden_state_index_x, hidden_state_index_y, best_action, is_reset;
             float value_prefix, prior, value_sum;
+            /*
+                TODO: Add CNode variables:
+                float value_prefix_uncertainty, value_uncertainty_sum, beta;
+                bool mu_explore;
+            */
             std::vector<int> children_index;
             std::vector<CNode>* ptr_node_pool;
 
+
             CNode();
+            /*
+                TODO: modify CNode constructor header:
+                CNode(float prior, int action_num, std::vector<CNode> *ptr_node_pool, bool parent_mu_explore);
+            */
             CNode(float prior, int action_num, std::vector<CNode> *ptr_node_pool);
             ~CNode();
 
+            /*
+                TODO: Add new expand function header:
+                void expand(int to_play, int hidden_state_index_x, int hidden_state_index_y, float value_prefix, const std::vector<float> &policy_logits, float value_prefix_uncertainty);
+            */
             void expand(int to_play, int hidden_state_index_x, int hidden_state_index_y, float value_prefix, const std::vector<float> &policy_logits);
             void add_exploration_noise(float exploration_fraction, const std::vector<float> &noises);
             float get_mean_q(int isRoot, float parent_q, float discount);
@@ -34,6 +48,10 @@ namespace tree {
             int expanded();
 
             float value();
+            /*
+                TODO: Add CNode function headers:
+                float value_uncertainty();
+            */
 
             std::vector<int> get_trajectory();
             std::vector<int> get_children_distribution();
@@ -49,7 +67,11 @@ namespace tree {
             CRoots();
             CRoots(int root_num, int action_num, int pool_size);
             ~CRoots();
-
+               
+            /*
+                TODO: Add function prepare_explore header:
+                void prepare_explore(float root_exploration_fraction, const std::vector<std::vector<float>> &noises, const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies, const std::vector<float> &value_prefixs_uncertainty);    
+            */
             void prepare(float root_exploration_fraction, const std::vector<std::vector<float>> &noises, const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies);
             void prepare_no_noise(const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies);
             void clear();
@@ -72,6 +94,11 @@ namespace tree {
 
     };
 
+    /*
+        TODO:
+           Modify the UCB score function header
+        float cucb_score(CNode *child, tools::CMinMaxStats &min_max_stats, float parent_mean_q, int is_reset, float total_children_visit_counts, float parent_value_prefix, float pb_c_base, float pb_c_init, float discount, float parent_mean_q_uncertainty, float parent_value_prefix_uncertainty);
+    */
 
     //*********************************************************
     void update_tree_q(CNode* root, tools::CMinMaxStats &min_max_stats, float discount);

@@ -5,6 +5,7 @@ from core.utils import make_atari, WarpFrame, EpisodicLifeEnv
 from core.dataset import Transforms
 from .env_wrapper import AtariWrapper
 from .model import EfficientZeroNet
+from .model import EfficientExploreNet
 
 
 class AtariConfig(BaseConfig):
@@ -61,7 +62,10 @@ class AtariConfig(BaseConfig):
             proj_hid=1024,
             proj_out=1024,
             pred_hid=512,
-            pred_out=1024,)
+            pred_out=1024,
+            # use uncertainty
+            use_uncertainty_architecture = False,
+        )
         self.discount **= self.frame_skip
         self.max_moves //= self.frame_skip
         self.test_max_moves //= self.frame_skip
@@ -105,30 +109,57 @@ class AtariConfig(BaseConfig):
         self.action_space_size = game.action_space_size
 
     def get_uniform_network(self):
-        return EfficientZeroNet(
-            self.obs_shape,
-            self.action_space_size,
-            self.blocks,
-            self.channels,
-            self.reduced_channels_reward,
-            self.reduced_channels_value,
-            self.reduced_channels_policy,
-            self.resnet_fc_reward_layers,
-            self.resnet_fc_value_layers,
-            self.resnet_fc_policy_layers,
-            self.reward_support.size,
-            self.value_support.size,
-            self.downsample,
-            self.inverse_value_transform,
-            self.inverse_reward_transform,
-            self.lstm_hidden_size,
-            bn_mt=self.bn_mt,
-            proj_hid=self.proj_hid,
-            proj_out=self.proj_out,
-            pred_hid=self.pred_hid,
-            pred_out=self.pred_out,
-            init_zero=self.init_zero,
-            state_norm=self.state_norm)
+        #TODO: I need to add here the following:
+        if self.use_uncertainty_architecture:
+            return EfficientExploreNet(
+                self.obs_shape,
+                self.action_space_size,
+                self.blocks,
+                self.channels,
+                self.reduced_channels_reward,
+                self.reduced_channels_value,
+                self.reduced_channels_policy,
+                self.resnet_fc_reward_layers,
+                self.resnet_fc_value_layers,
+                self.resnet_fc_policy_layers,
+                self.reward_support.size,
+                self.value_support.size,
+                self.downsample,
+                self.inverse_value_transform,
+                self.inverse_reward_transform,
+                self.lstm_hidden_size,
+                bn_mt=self.bn_mt,
+                proj_hid=self.proj_hid,
+                proj_out=self.proj_out,
+                pred_hid=self.pred_hid,
+                pred_out=self.pred_out,
+                init_zero=self.init_zero,
+                state_norm=self.state_norm)
+        else:
+            return EfficientZeroNet(
+                self.obs_shape,
+                self.action_space_size,
+                self.blocks,
+                self.channels,
+                self.reduced_channels_reward,
+                self.reduced_channels_value,
+                self.reduced_channels_policy,
+                self.resnet_fc_reward_layers,
+                self.resnet_fc_value_layers,
+                self.resnet_fc_policy_layers,
+                self.reward_support.size,
+                self.value_support.size,
+                self.downsample,
+                self.inverse_value_transform,
+                self.inverse_reward_transform,
+                self.lstm_hidden_size,
+                bn_mt=self.bn_mt,
+                proj_hid=self.proj_hid,
+                proj_out=self.proj_out,
+                pred_hid=self.pred_hid,
+                pred_out=self.pred_out,
+                init_zero=self.init_zero,
+                state_norm=self.state_norm)
 
     def new_game(self, seed=None, save_video=False, save_path=None, video_callable=None, uid=None, test=False, final_test=False):
         if test:
@@ -153,9 +184,11 @@ class AtariConfig(BaseConfig):
         return AtariWrapper(env, discount=self.discount, cvt_string=self.cvt_string)
 
     def scalar_reward_loss(self, prediction, target):
+        # TODO: If prediction is a list of tensors, return ensemble_scalar_reward_loss
         return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
 
     def scalar_value_loss(self, prediction, target):
+        #TODO: If prediction is a list of tensors, return ensemble_scalar_value_loss
         return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
 
     def set_transforms(self):
@@ -165,5 +198,26 @@ class AtariConfig(BaseConfig):
     def transform(self, images):
         return self.transforms.transform(images)
 
+    # TODO:
+    def ensemble_scalar_reward_loss(self, predictions, target):
+        assert type(predictions) is list
+        scalar_loss = 0
+        for prediction in predictions:
+            scalar_loss += self.scalar_reward_loss(prediction, target)
+        scalar_loss = scalar_loss / len(predictions)
+        return scalar_loss
+
+    # TODO:
+    def ensemble_scalar_value_loss(self, predictions, target):
+        assert type(predictions) is list
+        scalar_loss = 0
+        for prediction in predictions:
+            scalar_loss += self.scalar_value_loss(prediction, target)
+        scalar_loss = scalar_loss / len(predictions)
+        return scalar_loss
+
+    # TODO:
+    def ube_loss(self, prediction, target):
+        return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
 
 game_config = AtariConfig()
