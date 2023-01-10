@@ -244,8 +244,11 @@ class BatchWorker_CPU(object):
                 time.sleep(1)
                 continue
 
-            ray_data_lst = [self.storage.get_counter.remote(), self.storage.get_target_weights.remote()]
-            trained_steps, target_weights = ray.get(ray_data_lst)
+            # Based on the recommendation in issue https://github.com/YeWR/EfficientZero/issues/26
+            # ray_data_lst = [self.storage.get_counter.remote(), self.storage.get_target_weights.remote()]
+            # trained_steps, target_weights = ray.get(ray_data_lst)
+            trained_steps = ray.get(self.storage.get_counter.remote())
+            target_weights = None
 
             beta = self.beta_schedule.value(trained_steps)
             # obtain the batch context from replay buffer
@@ -258,6 +261,7 @@ class BatchWorker_CPU(object):
             new_model_index = trained_steps // self.config.target_model_interval
             if new_model_index > self.last_model_index:
                 self.last_model_index = new_model_index
+                target_weights = ray.get(self.storage.get_target_weights.remote())
             else:
                 target_weights = None
 
@@ -270,7 +274,7 @@ class BatchWorker_CPU(object):
                     time.sleep(0.1)
 
 
-@ray.remote(num_gpus=0.25)#(num_gpus=0.125)
+@ray.remote(num_gpus=0.25)#num_gpus=0.125 is the original, num_gpus=0.25 runs on my machine. num_gpus=0.5  should in principle need 5GB of ram and i have 4, but i made the batch size half
 class BatchWorker_GPU(object):
     def __init__(self, worker_id, replay_buffer, storage, batch_storage, mcts_storage, config):
         """GPU Batch Worker for reanalyzing targets, see Appendix.

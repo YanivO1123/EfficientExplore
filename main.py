@@ -61,8 +61,9 @@ if __name__ == '__main__':
         ' Revisit policy search rate should be in [0,1]'
 
     if args.opr == 'train':
+        os.environ["RAY_memory_monitor_refresh_ms"] = "0"
         ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus)#,
-                 #object_store_memory=args.object_store_memory)
+                 # object_store_memory=args.object_store_memory)
     else:
         ray.init()
 

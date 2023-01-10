@@ -592,7 +592,6 @@ class EfficientZeroNet(BaseNet):
             return proj.detach()
 
 
-#TODO:
 class EfficientExploreNet(EfficientZeroNet):
     def __init__(self,
                  observation_shape,
@@ -618,6 +617,10 @@ class EfficientExploreNet(EfficientZeroNet):
                  pred_out=256,
                  init_zero=False,
                  state_norm=False,
+                 use_ube=False,
+                 ensemble_size=2,
+                 use_network_prior=True,
+                 prior_scale=10,
                  ):
         super(EfficientExploreNet, self).__init__(
             observation_shape,
@@ -644,42 +647,262 @@ class EfficientExploreNet(EfficientZeroNet):
             init_zero=init_zero,
             state_norm=state_norm)
 
+        block_output_size_reward = (
+            (
+                    reduced_channels_reward
+                    * math.ceil(observation_shape[1] / 16)
+                    * math.ceil(observation_shape[2] / 16)
+            )
+            if downsample
+            else (reduced_channels_reward * observation_shape[1] * observation_shape[2])
+        )
+
+        block_output_size_value = (
+            (
+                    reduced_channels_value
+                    * math.ceil(observation_shape[1] / 16)
+                    * math.ceil(observation_shape[2] / 16)
+            )
+            if downsample
+            else (reduced_channels_value * observation_shape[1] * observation_shape[2])
+        )
+
+        block_output_size_policy = (
+            (
+                    reduced_channels_policy
+                    * math.ceil(observation_shape[1] / 16)
+                    * math.ceil(observation_shape[2] / 16)
+            )
+            if downsample
+            else (reduced_channels_policy * observation_shape[1] * observation_shape[2])
+        )
+
+        self.dynamics_network = EnsembleDynamicsNetwork(
+            num_blocks,
+            num_channels + 1,
+            reduced_channels_reward,
+            fc_reward_layers,
+            reward_support_size,
+            block_output_size_reward,
+            lstm_hidden_size=lstm_hidden_size,
+            momentum=bn_mt,
+            init_zero=self.init_zero,
+            ensemble_size=ensemble_size,
+            use_network_prior=use_network_prior,
+            prior_scale=prior_scale,
+        )
+
+        self.prediction_network = EnsemblePredictionNetwork(
+            action_space_size,
+            num_blocks,
+            num_channels,
+            reduced_channels_value,
+            reduced_channels_policy,
+            fc_value_layers,
+            fc_policy_layers,
+            value_support_size,
+            block_output_size_value,
+            block_output_size_policy,
+            momentum=bn_mt,
+            init_zero=self.init_zero,
+            ensemble_size=ensemble_size,
+            use_network_prior=use_network_prior,
+            prior_scale=prior_scale,
+        )
+
         #TODO: Add UBE network
-        self.ube_network = NotImplementedError
+        self.use_ube = use_ube
+        if self.use_ube:
+            self.ube_network = NotImplementedError
 
-        raise NotImplementedError
+    #TODO: Complete this function, and move it because it probably doesnt belong here.
+    def ensemble_prediction_to_variance(self, logits):
+        assert isinstance(logits, list)
+        # logits is a list of length ensemble_size, of tensors of shape: (num_parallel_envs, full_support_size)
+        with torch.no_grad():
+            # Softmax the logits
+            logits = [torch.softmax(logits[i], dim=1) for i in range(len(logits))]
 
-    def ensemble_to_scalar(self, logits_list):
-        """
-            This function takes a list of logits for reward, value or value prefix predictions, and returns a scalar
-            mean of the predictions
-        """
-        assert type(logits_list) is list
-        scalar = 0
-        for logits in logits_list:
-            scalar += self.inverse_value_transform(logits).detach().cpu().numpy()
-        scalar = scalar / len(logits_list)
-        return scalar
+            # Stack into a tensor to compute the variance using torch.
+            stacked_tensor = torch.stack(logits, dim=0)
+            # Shape of stacked_tensor: (ensemble_size, num_parallel_envs, full_support_size)
 
-    #TODO: Complete the variance computation
-    def ensemble_to_variance(self, logits_list):
-        """
-            This function takes a list of logits for reward, value or value prefix predictions, and returns a scalar
-            variance of the predictions
-        """
-        assert type(logits_list) is list
+            # Compute the per-entry variance over the dimension 0 (ensemble size)
+            scalar_variance = torch.var(stacked_tensor, unbiased=False, dim=0)
+            # Resulting shape of scalar_variance: (num_parallel_envs, full_support_size)
 
-        return NotImplementedError
+            # Sum the per-entry variance scores
+            scalar_variance = scalar_variance.sum(-1)
+            # Resulting shape of scalar_variance: (num_parallel_envs)
 
-    # TODO: Complete the prediction computation with ensembles
-    def prediction(self, encoded_state):
-        return NotImplementedError
-
-    # TODO: Complete the dynamics computation with ensembles
-    def dynamics(self, encoded_state, reward_hidden, action):
-        return NotImplementedError
+            return scalar_variance
 
     # TODO: Complete the UBE prediction computation
     def ube(self, encoded_state, action):
         # I need to decide if UBE takes encoded_state or encoded_state and action
         return NotImplementedError
+
+
+class EnsembleDynamicsNetwork(DynamicsNetwork):
+    def __init__(
+            self,
+            num_blocks,
+            num_channels,
+            reduced_channels_reward,
+            fc_reward_layers,
+            full_support_size,
+            block_output_size_reward,
+            lstm_hidden_size=64,
+            momentum=0.1,
+            init_zero=False,
+            ensemble_size=2,
+            use_network_prior=True,
+            prior_scale = 10,
+    ):
+        """
+            The EnsembleDynamicsNetwork shares the same architecture with the DynamicsNetwork, with the exception that
+            the EnsembleDynamicsNetwork has an ensemble of value-prefix and reward-hidden prediction heads.
+            These heads are a list of LSTMs, a list of bn_value_prefix networks, and fc networks
+        """
+        super(EnsembleDynamicsNetwork, self).__init__(
+            num_blocks,
+            num_channels,
+            reduced_channels_reward,
+            fc_reward_layers,
+            full_support_size,
+            block_output_size_reward,
+            lstm_hidden_size,
+            momentum,
+            init_zero)
+
+        self.ensemble_size = ensemble_size
+        self.use_network_prior=use_network_prior
+        self.prior_scale = prior_scale
+        if self.use_network_prior:
+            raise NotImplementedError
+            # This needs to be refactured to a non-lstm prior net
+            # self.prior_lstm_nets = nn.ModuleList([nn.LSTM(input_size=self.block_output_size_reward, hidden_size=self.lstm_hidden_size)
+            #               for _ in range(ensemble_size)])
+        self.bn_value_prefix_nets = nn.ModuleList([nn.BatchNorm1d(self.lstm_hidden_size, momentum=momentum) for _ in range(ensemble_size)])
+        self.bn_value_prefix = None # To make sure there are no unused params
+        self.fc_nets = nn.ModuleList([mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
+        self.fc = None  # To make sure there are no unused params
+
+    def forward(self, x, reward_hidden):
+        """
+            The ensemble dynamics network returns a list output value_prefix_list
+        """
+        state = x[:, :-1, :, :]
+        x = self.conv(x)
+        x = self.bn(x)
+
+        x += state
+        x = nn.functional.relu(x)
+
+        for block in self.resblocks:
+            x = block(x)
+        state = x
+
+        x = self.conv1x1_reward(x)
+        x = self.bn_reward(x)
+        x = nn.functional.relu(x)
+
+        x = x.view(-1, self.block_output_size_reward).unsqueeze(0)
+        original_value_prefix, reward_hidden = self.lstm(x, reward_hidden)
+        original_value_prefix = original_value_prefix.squeeze(0)
+        value_prefix_list = [net(original_value_prefix) for net in self.bn_value_prefix_nets]
+        value_prefix_list = [nn.functional.relu(value_prefix) for value_prefix in value_prefix_list]
+        value_prefix_list = [fc_net(value_prefix) for fc_net, value_prefix in zip(self.fc_nets, value_prefix_list)]
+
+        return state, reward_hidden, value_prefix_list
+
+    def get_reward_mean(self):
+        reward_w_dist = self.conv1x1_reward.weight.detach().cpu().numpy().reshape(-1)
+
+        # Iterate over the first network to get the tensor of the right size
+        for name, param in self.fc_nets[0].named_parameters():
+            temp_weights = param.detach().cpu().numpy().reshape(-1)
+            reward_w_dist = np.concatenate((reward_w_dist, temp_weights))
+        reward_mean = np.abs(reward_w_dist).mean()
+
+        # Iterate over the rest of the networks:
+        for net_index in range(1, len(self.fc_nets)):
+            for name, param in self.fc_nets[net_index].named_parameters():
+                temp_weights = param.detach().cpu().numpy().reshape(-1)
+                reward_w_dist = np.concatenate((reward_w_dist, temp_weights))
+            reward_mean += np.abs(reward_w_dist).mean()
+        return reward_w_dist, reward_mean / len(self.fc_nets)
+
+class EnsemblePredictionNetwork(PredictionNetwork):
+    def __init__(
+            self,
+            action_space_size,
+            num_blocks,
+            num_channels,
+            reduced_channels_value,
+            reduced_channels_policy,
+            fc_value_layers,
+            fc_policy_layers,
+            full_support_size,
+            block_output_size_value,
+            block_output_size_policy,
+            momentum=0.1,
+            init_zero=False,
+            ensemble_size=2,
+            use_network_prior=True,
+            prior_scale=10,
+    ):
+        """Ensembled Prediction network
+        Parameters (additional to Prediction network)
+        ----------
+        ensemble_size: int
+            the size of the ensemble
+        use_network_prior: bool
+            whether to use a prior-network, see Randomized Prior Functions for Deep Reinforcement Learning
+        prior_scale: int
+            The scale of the influence of the prior network on the prediction
+        """
+        super(EnsemblePredictionNetwork, self).__init__(
+            action_space_size,
+            num_blocks,
+            num_channels,
+            reduced_channels_value,
+            reduced_channels_policy,
+            fc_value_layers,
+            fc_policy_layers,
+            full_support_size,
+            block_output_size_value,
+            block_output_size_policy,
+            momentum=momentum,
+            init_zero=init_zero,
+        )
+
+        self.ensemble_size = ensemble_size
+        self.prior_scale = prior_scale
+        self.use_network_prior = use_network_prior
+        self.bn_value_nets = nn.ModuleList([nn.BatchNorm2d(reduced_channels_value, momentum=momentum) for _ in range(ensemble_size)])
+        # self.bn_value = None
+        self.fc_value_nets = nn.ModuleList([mlp(self.block_output_size_value, fc_value_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
+        # self.fc_value = None
+
+    def forward(self, x):
+        """
+            This function takes as input a state x, and outputs a LIST of tensors values, and a tesnor policy
+        """
+        for block in self.resblocks:
+            x = block(x)
+
+        policy = self.conv1x1_policy(x)
+        policy = self.bn_policy(policy)
+        policy = nn.functional.relu(policy)
+        policy = policy.view(-1, self.block_output_size_policy)
+        policy = self.fc_policy(policy)
+
+        # this part of value prediction is not ensmebled
+        value_after_conv = self.conv1x1_value(x)
+
+        values = [bn_value_net(value_after_conv) for bn_value_net in self.bn_value_nets]
+        values = [value.view(-1, self.block_output_size_value) for value in values]
+        values = [fc_value_net(value) for fc_value_net, value in zip(self.fc_value_nets, values)]
+
+        return policy, values

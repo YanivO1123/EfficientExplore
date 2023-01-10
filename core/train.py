@@ -114,9 +114,9 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
     if config.amp_type == 'torch_amp':
         with autocast():
-            value, _, policy_logits, hidden_state, reward_hidden = model.initial_inference(obs_batch)
+            value, _, policy_logits, hidden_state, reward_hidden, _, _ = model.initial_inference(obs_batch)
     else:
-        value, _, policy_logits, hidden_state, reward_hidden = model.initial_inference(obs_batch)
+        value, _, policy_logits, hidden_state, reward_hidden, _, _ = model.initial_inference(obs_batch)
     scaled_value = config.inverse_value_transform(value)
 
     if vis_result:
@@ -145,7 +145,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
         with autocast():
             for step_i in range(config.num_unroll_steps):
                 # unroll with the dynamics function
-                value, value_prefix, policy_logits, hidden_state, reward_hidden = model.recurrent_inference(hidden_state, reward_hidden, action_batch[:, step_i])
+                value, value_prefix, policy_logits, hidden_state, reward_hidden, _, _ = model.recurrent_inference(hidden_state, reward_hidden, action_batch[:, step_i])
 
                 beg_index = config.image_channel * step_i
                 end_index = config.image_channel * (step_i + config.stacked_observations)
@@ -153,7 +153,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 # consistency loss
                 if config.consistency_coeff > 0:
                     # obtain the oracle hidden states from representation function
-                    _, _, _, presentation_state, _ = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
+                    _, _, _, presentation_state, _, _, _ = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
                     # no grad for the presentation_state branch
                     dynamic_proj = model.project(hidden_state, with_grad=True)
                     observation_proj = model.project(presentation_state, with_grad=False)
@@ -174,7 +174,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                                      torch.zeros(1, config.batch_size, config.lstm_hidden_size).to(config.device))
 
                 if vis_result:
-                    scaled_value_prefixs = config.inverse_reward_transform(value_prefix.detach())
+                    scaled_value_prefixs = config.inverse_reward_transform(value_prefix).detach()
                     scaled_value_prefixs_cpu = scaled_value_prefixs.detach().cpu()
 
                     predicted_values = torch.cat((predicted_values, config.inverse_value_transform(value).detach().cpu()))
@@ -200,7 +200,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     else:
         for step_i in range(config.num_unroll_steps):
             # unroll with the dynamics function
-            value, value_prefix, policy_logits, hidden_state, reward_hidden = model.recurrent_inference(hidden_state, reward_hidden, action_batch[:, step_i])
+            value, value_prefix, policy_logits, hidden_state, reward_hidden, _, _ = model.recurrent_inference(hidden_state, reward_hidden, action_batch[:, step_i])
 
             beg_index = config.image_channel * step_i
             end_index = config.image_channel * (step_i + config.stacked_observations)
@@ -208,7 +208,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
             # consistency loss
             if config.consistency_coeff > 0:
                 # obtain the oracle hidden states from representation function
-                _, _, _, presentation_state, _ = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
+                _, _, _, presentation_state, _, _, _ = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
                 # no grad for the presentation_state branch
                 dynamic_proj = model.project(hidden_state, with_grad=True)
                 observation_proj = model.project(presentation_state, with_grad=False)
@@ -229,7 +229,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                                  torch.zeros(1, config.batch_size, config.lstm_hidden_size).to(config.device))
 
             if vis_result:
-                scaled_value_prefixs = config.inverse_reward_transform(value_prefix.detach())
+                scaled_value_prefixs = config.inverse_reward_transform(value_prefix).detach()
                 scaled_value_prefixs_cpu = scaled_value_prefixs.detach().cpu()
 
                 predicted_values = torch.cat((predicted_values, config.inverse_value_transform(value).detach().cpu()))
@@ -359,6 +359,8 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
     if config.use_augmentation:
         config.set_transforms()
 
+    print("Started collecting data to start training")
+
     # wait until collecting enough data to start
     while not (ray.get(replay_buffer.get_total_len.remote()) >= config.start_transitions):
         time.sleep(1)
@@ -444,6 +446,18 @@ def train(config, summary_writer, model_path=None):
         model.load_state_dict(weights)
         target_model.load_state_dict(weights)
 
+    print(f"MuExplore hyperparameters configuration: \n"
+          f"Uncertainty-architecture params: \n"
+          f"Use uncertainty architecture: {config.use_uncertainty_architecture} \n"
+          f"Ensemble size: {config.ensemble_size} \n"
+          f"Use network prior: {config.use_network_prior} \n"
+          f"Exploration params: \n"
+          f"Use MuExplore in MCTS: {config.mu_explore} \n"
+          f"Beta value = {config.beta} \n"
+          f"Disable policy usage in exploration: {config.disable_policy_in_exploration} \n"
+          )
+    print("Starting workers")
+
     storage = SharedStorage.remote(model, target_model)
 
     # prepare the batch and mctc context storage
@@ -455,18 +469,22 @@ def train(config, summary_writer, model_path=None):
     workers = []
 
     # reanalyze workers
+    print("Starting Reanalyze workers")
     cpu_workers = [BatchWorker_CPU.remote(idx, replay_buffer, storage, batch_storage, mcts_storage, config) for idx in range(config.cpu_actor)]
     workers += [cpu_worker.run.remote() for cpu_worker in cpu_workers]
     gpu_workers = [BatchWorker_GPU.remote(idx, replay_buffer, storage, batch_storage, mcts_storage, config) for idx in range(config.gpu_actor)]
     workers += [gpu_worker.run.remote() for gpu_worker in gpu_workers]
 
     # self-play workers
+    print("Starting data_workers")
     data_workers = [DataWorker.remote(rank, replay_buffer, storage, config) for rank in range(0, config.num_actors)]
     workers += [worker.run.remote() for worker in data_workers]
     # test workers
+    print("Starting test workers")
     workers += [_test.remote(config, storage)]
 
     # training loop
+    print("Calling _train")
     final_weights = _train(model, target_model, replay_buffer, storage, batch_storage, config, summary_writer)
 
     ray.wait(workers)

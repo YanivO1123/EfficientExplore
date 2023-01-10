@@ -14,6 +14,8 @@ class NetworkOutput(typing.NamedTuple):
     policy_logits: List[float]
     hidden_state: List[float]
     reward_hidden: object
+    value_variance: float
+    value_prefix_variance: float
 
 
 def concat_output_value(output_lst):
@@ -28,9 +30,13 @@ def concat_output_value(output_lst):
 
 
 def concat_output(output_lst):
+    #TODO: This is used by reanalyze to compute fresh predictions. In reanlyze, in basic MuExplore,
+    # the variances are not used (they are used to provide targets for UBE, if UBE is used)
+
     # concat the model output
     value_lst, reward_lst, policy_logits_lst, hidden_state_lst = [], [], [], []
     reward_hidden_c_lst, reward_hidden_h_lst =[], []
+    # value_variance_lst, value_prefix_variance_list = [], []
     for output in output_lst:
         value_lst.append(output.value)
         reward_lst.append(output.value_prefix)
@@ -38,6 +44,8 @@ def concat_output(output_lst):
         hidden_state_lst.append(output.hidden_state)
         reward_hidden_c_lst.append(output.reward_hidden[0].squeeze(0))
         reward_hidden_h_lst.append(output.reward_hidden[1].squeeze(0))
+        # value_variance_lst.append(output.value_variance)
+        # value_prefix_variance_list.append(output.value_prefix_variance)
 
     value_lst = np.concatenate(value_lst)
     reward_lst = np.concatenate(reward_lst)
@@ -46,6 +54,8 @@ def concat_output(output_lst):
     hidden_state_lst = np.concatenate(hidden_state_lst)
     reward_hidden_c_lst = np.expand_dims(np.concatenate(reward_hidden_c_lst), axis=0)
     reward_hidden_h_lst = np.expand_dims(np.concatenate(reward_hidden_h_lst), axis=0)
+    # value_variance_lst = np.concatenate(value_variance_lst)
+    # value_prefix_variance_list = np.concatenate(value_prefix_variance_list)
 
     return value_lst, reward_lst, policy_logits_lst, hidden_state_lst, (reward_hidden_c_lst, reward_hidden_h_lst)
 
@@ -78,13 +88,19 @@ class BaseNet(nn.Module):
     def dynamics(self, state, reward_hidden, action):
         raise NotImplementedError
 
+    def ensemble_prediction_to_variance(self, logits):
+        raise NotImplementedError
+
     def initial_inference(self, obs) -> NetworkOutput:
         num = obs.size(0)
 
         state = self.representation(obs)
         actor_logit, value = self.prediction(state)
+        value_variance = None
+        value_prefix_variance = None
 
         if not self.training:
+            # TODO: Add computation of actual variance from the list value, these are placeholder zeros
             # if not in training, obtain the scalars of the value/reward
             value = self.inverse_value_transform(value).detach().cpu().numpy()
             state = state.detach().cpu().numpy()
@@ -92,25 +108,40 @@ class BaseNet(nn.Module):
             # zero initialization for reward (value prefix) hidden states
             reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).detach().cpu().numpy(),
                              torch.zeros(1, num, self.lstm_hidden_size).detach().cpu().numpy())
+
+            #TODO: These are placeholders
+            value_variance = np.zeros_like(value)
+            value_prefix_variance = [0. for _ in range(num)]
+
         else:
             # zero initialization for reward (value prefix) hidden states
             reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).to('cuda'), torch.zeros(1, num, self.lstm_hidden_size).to('cuda'))
+            # The variances are not used throughout training, so we should be able to safely return Nones
 
-        return NetworkOutput(value, [0. for _ in range(num)], actor_logit, state, reward_hidden)
+
+        return NetworkOutput(value, [0. for _ in range(num)], actor_logit, state, reward_hidden, value_variance, value_prefix_variance)
 
     def recurrent_inference(self, hidden_state, reward_hidden, action) -> NetworkOutput:
         state, reward_hidden, value_prefix = self.dynamics(hidden_state, reward_hidden, action)
         actor_logit, value = self.prediction(state)
+        #MuExplore: Setup the uncertainty return values, which are only relevant when not-training
+        value_variance = None
+        value_prefix_variance = None
 
         if not self.training:
+            # TODO: Add call to the NN variance computation. Should be here, because after the calls to
+            #  inverse_value_transform will already return the mean of the prediction
             # if not in training, obtain the scalars of the value/reward
             value = self.inverse_value_transform(value).detach().cpu().numpy()
             value_prefix = self.inverse_reward_transform(value_prefix).detach().cpu().numpy()
             state = state.detach().cpu().numpy()
             reward_hidden = (reward_hidden[0].detach().cpu().numpy(), reward_hidden[1].detach().cpu().numpy())
             actor_logit = actor_logit.detach().cpu().numpy()
+            # TODO: Placeholder for uncertainty computation.
+            value_variance = np.ones_like(value) * 100
+            value_prefix_variance = np.ones_like(value_prefix) * 100
 
-        return NetworkOutput(value, value_prefix, actor_logit, state, reward_hidden)
+        return NetworkOutput(value, value_prefix, actor_logit, state, reward_hidden, value_variance, value_prefix_variance)
 
     def get_weights(self):
         return {k: v.cpu() for k, v in self.state_dict().items()}

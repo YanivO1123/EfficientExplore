@@ -73,7 +73,14 @@ class BaseConfig(object):
                  pred_out: int = 256,
                  value_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
                  reward_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
+                 mu_explore: bool = False,
                  use_uncertainty_architecture: bool = False,
+                 ensemble_size: int = 5,
+                 use_network_prior: bool = False,
+                 prior_scale: float = 10.0,
+                 beta: float = 1E+6,
+                 disable_policy_in_exploration: bool = True,
+                 training_ratio: float = 1,
                  ):
         """Base Config for EfficietnZero
         Parameters
@@ -192,9 +199,28 @@ class BaseConfig(object):
             support of value to represent the value scalars
         reward_support: DiscreteSupport
             support of reward to represent the reward scalars
+        mu_explore: bool
+            whether to use mu_explore in MCTS (i.e. out of p_mcts_num envs, one is exploitatory (standard), and the rest
+            are exploratory (with MuExplore)
         use_uncertainty_architecture: bool
             a bool whether to init a regular EffZero network, or a network with ensembles over value prefix and
             value predictions
+        ensemble_size: int
+            The number of ensemble-heads, both for value prediction as well as value prefix prediction.
+        use_network_prior: bool
+            Whether to use prior functions on the ensemble heads, or not
+        prior_scale: float
+            The scale of the prior in the computation
+        beta: float
+            used in MuExplore in UCB computation to prioritize exploration / exploitation, as follows:
+                MuExplore_UCB = value + beta * sqrt(value_variance)
+        disable_policy_in_exploration: bool
+            If True, the agent does not use the policy to compute the prior in exploration episodes.
+            This is important because the policy heavily influences MCTS search and thus action selection, and in
+            exploration the agent should be free to explore in varied directions.
+        training_ratio: float
+            a float >= 1, guarantees that ratio: % trained steps / % transitions >= training_ratio
+            The purpose is to encourage / require / enable the agent to train much more than interact.
         """
         # Self-Play
         self.action_space_size = None
@@ -289,8 +315,20 @@ class BaseConfig(object):
         self.pred_hid = pred_hid
         self.pred_out = pred_out
 
-        # uncertainty
+        ## uncertainty
+        # architecture
         self.use_uncertainty_architecture = use_uncertainty_architecture
+        self.ensemble_size = ensemble_size
+        self.use_network_prior = use_network_prior
+        self.prior_scale = prior_scale
+
+        # exploration
+        self.mu_explore = mu_explore
+        self.beta = beta
+        self.disable_policy_in_exploration = disable_policy_in_exploration
+
+        # control training / interactions ratio
+        self.training_ratio = training_ratio
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -330,23 +368,31 @@ class BaseConfig(object):
         """ Reference from MuZerp: Appendix F => Network Architecture
         & Appendix A : Proposition A.2 in https://arxiv.org/pdf/1805.11593.pdf (Page-11)
         """
-        delta = self.value_support.delta
-        value_probs = torch.softmax(logits, dim=1)
-        value_support = torch.ones(value_probs.shape)
-        value_support[:, :] = torch.from_numpy(np.array([x for x in scalar_support.range]))
-        value_support = value_support.to(device=value_probs.device)
-        value = (value_support * value_probs).sum(1, keepdim=True) / delta
+        # If it's an ensemble output, return the mean prediction
+        if isinstance(logits, list):
+            mean_value = self.inverse_scalar_transform(logits[0], scalar_support)
+            for logits_index in range(1, len(logits)):
+                mean_value += self.inverse_scalar_transform(logits[logits_index], scalar_support)
+            mean_value = mean_value / len(logits)
+            return mean_value
+        else:
+            delta = self.value_support.delta
+            value_probs = torch.softmax(logits, dim=1)
+            value_support = torch.ones(value_probs.shape)
+            value_support[:, :] = torch.from_numpy(np.array([x for x in scalar_support.range]))
+            value_support = value_support.to(device=value_probs.device)
+            value = (value_support * value_probs).sum(1, keepdim=True) / delta
 
-        epsilon = 0.001
-        sign = torch.ones(value.shape).float().to(value.device)
-        sign[value < 0] = -1.0
-        output = (((torch.sqrt(1 + 4 * epsilon * (torch.abs(value) + 1 + epsilon)) - 1) / (2 * epsilon)) ** 2 - 1)
-        output = sign * output * delta
+            epsilon = 0.001
+            sign = torch.ones(value.shape).float().to(value.device)
+            sign[value < 0] = -1.0
+            output = (((torch.sqrt(1 + 4 * epsilon * (torch.abs(value) + 1 + epsilon)) - 1) / (2 * epsilon)) ** 2 - 1)
+            output = sign * output * delta
 
-        nan_part = torch.isnan(output)
-        output[nan_part] = 0.
-        output[torch.abs(output) < epsilon] = 0.
-        return output
+            nan_part = torch.isnan(output)
+            output[nan_part] = 0.
+            output[torch.abs(output) < epsilon] = 0.
+            return output
 
     def value_phi(self, x):
         return self._phi(x, self.value_support.min, self.value_support.max, self.value_support.size)

@@ -102,6 +102,7 @@ class DataWorker(object):
         return priorities
 
     def run(self):
+        print(f"Data worker started")
         # number of parallel mcts
         env_nums = self.config.p_mcts_num
         model = self.config.get_uniform_network()
@@ -172,8 +173,9 @@ class DataWorker(object):
                         # training is finished
                         time.sleep(30)
                         return
-                    if start_training and (total_transitions / max_transitions) > (trained_steps / self.config.training_steps):
+                    if start_training and self.config.training_ratio * (total_transitions / max_transitions) > (trained_steps / self.config.training_steps):
                         # self-play is faster than training speed or finished
+                        # MuExplore: added self.config.training_ratio, which requires ratio training / interactions to be AT LEAST self.config.training_ratio
                         time.sleep(1)
                         continue
 
@@ -277,20 +279,32 @@ class DataWorker(object):
                     reward_hidden_roots = network_output.reward_hidden
                     value_prefix_pool = network_output.value_prefix
                     policy_logits_pool = network_output.policy_logits.tolist()
+                    value_prefix_variance_pool = network_output.value_prefix_variance
 
-                    #TODO: This function does the MCTS. I should pass that one is exploit and the rest are explore
-                    roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations)
-                    noises = [np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(np.float32).tolist() for _ in range(env_nums)]
-                    roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool, policy_logits_pool)
+                    noises = [
+                        np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
+                            np.float32).tolist() for _ in range(env_nums)]
+
+                    #MuExplore: Init Exploratory CRoots and prepare them exploratorily
+                    if self.config.mu_explore:
+                        # MuExplore: Disable policy in prior
+                        if self.config.disable_policy_in_exploration:
+                            policy_logits_pool = [policy_logits_pool[0]] + [np.ones_like(policy_logits_pool[0]).tolist()
+                                                                            for _ in range(len(policy_logits_pool) - 1)]
+                        roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations, self.config.beta)
+                        roots.prepare_explore(self.config.root_exploration_fraction, noises, value_prefix_pool,
+                                              policy_logits_pool, value_prefix_variance_pool, self.config.beta)
+                    else:
+                        roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations)
+                        roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool,
+                                      policy_logits_pool)
+
                     # do MCTS for a policy
                     MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots)
 
                     roots_distributions = roots.get_distributions()
                     roots_values = roots.get_values()
                     for i in range(env_nums):
-                        #TODO: Based on i, I can decide if this is an exploration or exploitation episode,
-                        # for action selection
-
                         deterministic = False
                         if start_training:
                             distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]

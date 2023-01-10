@@ -13,9 +13,9 @@ class AtariConfig(BaseConfig):
         super(AtariConfig, self).__init__(
             training_steps=100000,
             last_steps=20000,
-            test_interval=2000, #10000,
+            test_interval=5000, #10000,
             log_interval=1000,
-            vis_interval=100, # 1000,
+            vis_interval=1000,
             test_episodes=32,
             checkpoint_interval=100,
             target_model_interval=200,
@@ -27,7 +27,7 @@ class AtariConfig(BaseConfig):
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
-            batch_size=64, #256,
+            batch_size=64, # 64, #256,
             td_steps=5,
             num_actors=1,
             # network initialization/ & normalization
@@ -46,7 +46,7 @@ class AtariConfig(BaseConfig):
             # replay window
             start_transitions=8,
             total_transitions=100 * 1000,
-            transition_num=1,
+            transition_num=0.75, # 1,
             # frame skip & stack observation
             frame_skip=4,
             stacked_observations=4,
@@ -56,15 +56,25 @@ class AtariConfig(BaseConfig):
             policy_loss_coeff=1,
             consistency_coeff=2,
             # reward sum
-            lstm_hidden_size=512,
+            lstm_hidden_size=256, #512,
             lstm_horizon_len=5,
             # siamese
-            proj_hid=1024,
-            proj_out=1024,
-            pred_hid=512,
-            pred_out=1024,
-            # use uncertainty
-            use_uncertainty_architecture = False,
+            proj_hid=256, #1024,
+            proj_out=256, #1024,
+            pred_hid=128, #512,
+            pred_out=256, #1024,
+            # MuExplore
+            # Architecture
+            use_uncertainty_architecture=True,
+            ensemble_size=2,
+            use_network_prior=False,
+            prior_scale=10.0,
+            # Exploration
+            mu_explore=False,
+            beta=0,
+            disable_policy_in_exploration = False,
+            # ratio of training / interactions
+            training_ratio = 1,
         )
         self.discount **= self.frame_skip
         self.max_moves //= self.frame_skip
@@ -110,56 +120,61 @@ class AtariConfig(BaseConfig):
 
     def get_uniform_network(self):
         #TODO: I need to add here the following:
-        # if self.use_uncertainty_architecture:
-        #     return EfficientExploreNet(
-        #         self.obs_shape,
-        #         self.action_space_size,
-        #         self.blocks,
-        #         self.channels,
-        #         self.reduced_channels_reward,
-        #         self.reduced_channels_value,
-        #         self.reduced_channels_policy,
-        #         self.resnet_fc_reward_layers,
-        #         self.resnet_fc_value_layers,
-        #         self.resnet_fc_policy_layers,
-        #         self.reward_support.size,
-        #         self.value_support.size,
-        #         self.downsample,
-        #         self.inverse_value_transform,
-        #         self.inverse_reward_transform,
-        #         self.lstm_hidden_size,
-        #         bn_mt=self.bn_mt,
-        #         proj_hid=self.proj_hid,
-        #         proj_out=self.proj_out,
-        #         pred_hid=self.pred_hid,
-        #         pred_out=self.pred_out,
-        #         init_zero=self.init_zero,
-        #         state_norm=self.state_norm)
-        # else:
-        return EfficientZeroNet(
-            self.obs_shape,
-            self.action_space_size,
-            self.blocks,
-            self.channels,
-            self.reduced_channels_reward,
-            self.reduced_channels_value,
-            self.reduced_channels_policy,
-            self.resnet_fc_reward_layers,
-            self.resnet_fc_value_layers,
-            self.resnet_fc_policy_layers,
-            self.reward_support.size,
-            self.value_support.size,
-            self.downsample,
-            self.inverse_value_transform,
-            self.inverse_reward_transform,
-            self.lstm_hidden_size,
-            bn_mt=self.bn_mt,
-            proj_hid=self.proj_hid,
-            proj_out=self.proj_out,
-            pred_hid=self.pred_hid,
-            pred_out=self.pred_out,
-            init_zero=self.init_zero,
-            state_norm=self.state_norm)
+        if self.use_uncertainty_architecture:
+            print("Initiating EfficientExploreNet")
+            return EfficientExploreNet(
+                self.obs_shape,
+                self.action_space_size,
+                self.blocks,
+                self.channels,
+                self.reduced_channels_reward,
+                self.reduced_channels_value,
+                self.reduced_channels_policy,
+                self.resnet_fc_reward_layers,
+                self.resnet_fc_value_layers,
+                self.resnet_fc_policy_layers,
+                self.reward_support.size,
+                self.value_support.size,
+                self.downsample,
+                self.inverse_value_transform,
+                self.inverse_reward_transform,
+                self.lstm_hidden_size,
+                bn_mt=self.bn_mt,
+                proj_hid=self.proj_hid,
+                proj_out=self.proj_out,
+                pred_hid=self.pred_hid,
+                pred_out=self.pred_out,
+                init_zero=self.init_zero,
+                state_norm=self.state_norm,
+                ensemble_size=self.ensemble_size,
+                use_network_prior=self.use_network_prior,
+                prior_scale=self.prior_scale
+            )
+        else:
+            return EfficientZeroNet(
+                self.obs_shape,
+                self.action_space_size,
+                self.blocks,
+                self.channels,
+                self.reduced_channels_reward,
+                self.reduced_channels_value,
+                self.reduced_channels_policy,
+                self.resnet_fc_reward_layers,
+                self.resnet_fc_value_layers,
+                self.resnet_fc_policy_layers,
+                self.reward_support.size,
+                self.value_support.size,
+                self.downsample,
+                self.inverse_value_transform,
+                self.inverse_reward_transform,
+                self.lstm_hidden_size,
+                bn_mt=self.bn_mt,
+                proj_hid=self.proj_hid,
+                proj_out=self.proj_out,
+                pred_hid=self.pred_hid,
+                pred_out=self.pred_out,
+                init_zero=self.init_zero,
+                state_norm=self.state_norm)
 
     def new_game(self, seed=None, save_video=False, save_path=None, video_callable=None, uid=None, test=False, final_test=False):
         if test:
@@ -184,11 +199,13 @@ class AtariConfig(BaseConfig):
         return AtariWrapper(env, discount=self.discount, cvt_string=self.cvt_string)
 
     def scalar_reward_loss(self, prediction, target):
-        # TODO: If prediction is a list of tensors, return ensemble_scalar_reward_loss
+        if isinstance(prediction, list):
+            return self.ensemble_scalar_reward_loss(prediction, target)
         return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
 
     def scalar_value_loss(self, prediction, target):
-        #TODO: If prediction is a list of tensors, return ensemble_scalar_value_loss
+        if isinstance(prediction, list):
+            return self.ensemble_scalar_value_loss(prediction, target)
         return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
 
     def set_transforms(self):
@@ -198,22 +215,22 @@ class AtariConfig(BaseConfig):
     def transform(self, images):
         return self.transforms.transform(images)
 
-    # TODO:
+    #MuExplore: Compute the loss over an ensemble
     def ensemble_scalar_reward_loss(self, predictions, target):
         assert type(predictions) is list
-        scalar_loss = 0
-        for prediction in predictions:
-            scalar_loss += self.scalar_reward_loss(prediction, target)
-        scalar_loss = scalar_loss / len(predictions)
+        scalar_loss_list = [self.scalar_reward_loss(prediction, target) for prediction in predictions]
+        scalar_loss_tensor = torch.stack(scalar_loss_list, dim=0)
+        # shape of scalar_loss_tensor should be: (ensemble_size, batch_size, 1)
+        scalar_loss = torch.mean(scalar_loss_tensor, dim=0)
         return scalar_loss
 
-    # TODO:
+    #MuExplore: Compute the loss over an ensemble
     def ensemble_scalar_value_loss(self, predictions, target):
         assert type(predictions) is list
-        scalar_loss = 0
-        for prediction in predictions:
-            scalar_loss += self.scalar_value_loss(prediction, target)
-        scalar_loss = scalar_loss / len(predictions)
+        scalar_loss_list = [self.scalar_value_loss(prediction, target) for prediction in predictions]
+        scalar_loss_tensor = torch.stack(scalar_loss_list, dim=0)
+        # shape of scalar_loss_tensor should be: (ensemble_size, batch_size, 1)
+        scalar_loss = torch.mean(scalar_loss_tensor, dim=0)
         return scalar_loss
 
     # TODO:
