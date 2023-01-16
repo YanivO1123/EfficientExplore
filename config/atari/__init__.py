@@ -27,7 +27,7 @@ class AtariConfig(BaseConfig):
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
-            batch_size=64, # 64, #256,
+            batch_size=32, # 32 # 64 #256,
             td_steps=5,
             num_actors=1,
             # network initialization/ & normalization
@@ -46,7 +46,7 @@ class AtariConfig(BaseConfig):
             # replay window
             start_transitions=8,
             total_transitions=100 * 1000,
-            transition_num=0.75, # 1,
+            transition_num=1,
             # frame skip & stack observation
             frame_skip=4,
             stacked_observations=4,
@@ -67,10 +67,10 @@ class AtariConfig(BaseConfig):
             # Architecture
             use_uncertainty_architecture=True,
             ensemble_size=2,
-            use_network_prior=False,
+            use_network_prior=True,
             prior_scale=10.0,
             # Exploration
-            mu_explore=False,
+            mu_explore=True,
             beta=0,
             disable_policy_in_exploration = False,
             # ratio of training / interactions
@@ -119,7 +119,6 @@ class AtariConfig(BaseConfig):
         self.action_space_size = game.action_space_size
 
     def get_uniform_network(self):
-        #TODO: I need to add here the following:
         if self.use_uncertainty_architecture:
             print("Initiating EfficientExploreNet")
             return EfficientExploreNet(

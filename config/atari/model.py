@@ -1,4 +1,6 @@
 import math
+
+import numpy
 import torch
 
 import numpy as np
@@ -717,7 +719,8 @@ class EfficientExploreNet(EfficientZeroNet):
 
     #TODO: Complete this function, and move it because it probably doesnt belong here.
     def ensemble_prediction_to_variance(self, logits):
-        assert isinstance(logits, list)
+        if not isinstance(logits, list):
+            return None
         # logits is a list of length ensemble_size, of tensors of shape: (num_parallel_envs, full_support_size)
         with torch.no_grad():
             # Softmax the logits
@@ -776,17 +779,18 @@ class EnsembleDynamicsNetwork(DynamicsNetwork):
             init_zero)
 
         self.ensemble_size = ensemble_size
-        self.use_network_prior=use_network_prior
+        self.use_network_prior = use_network_prior
         self.prior_scale = prior_scale
-        if self.use_network_prior:
-            raise NotImplementedError
-            # This needs to be refactured to a non-lstm prior net
-            # self.prior_lstm_nets = nn.ModuleList([nn.LSTM(input_size=self.block_output_size_reward, hidden_size=self.lstm_hidden_size)
-            #               for _ in range(ensemble_size)])
-        self.bn_value_prefix_nets = nn.ModuleList([nn.BatchNorm1d(self.lstm_hidden_size, momentum=momentum) for _ in range(ensemble_size)])
-        self.bn_value_prefix = None # To make sure there are no unused params
+
+        # self.bn_value_prefix_nets = nn.ModuleList([nn.BatchNorm1d(self.lstm_hidden_size, momentum=momentum) for _ in range(ensemble_size)])
+        # self.bn_value_prefix = None # To make sure there are no unused params
         self.fc_nets = nn.ModuleList([mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
         self.fc = None  # To make sure there are no unused params
+
+        if self.use_network_prior:
+            self.prior_fc_nets = nn.ModuleList([mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
+        else:
+            self.prior_fc_nets = None
 
     def forward(self, x, reward_hidden):
         """
@@ -808,30 +812,38 @@ class EnsembleDynamicsNetwork(DynamicsNetwork):
         x = nn.functional.relu(x)
 
         x = x.view(-1, self.block_output_size_reward).unsqueeze(0)
-        original_value_prefix, reward_hidden = self.lstm(x, reward_hidden)
-        original_value_prefix = original_value_prefix.squeeze(0)
-        value_prefix_list = [net(original_value_prefix) for net in self.bn_value_prefix_nets]
-        value_prefix_list = [nn.functional.relu(value_prefix) for value_prefix in value_prefix_list]
-        value_prefix_list = [fc_net(value_prefix) for fc_net, value_prefix in zip(self.fc_nets, value_prefix_list)]
+
+        # When bn_value_prefix_nets are part of the ensemble:
+        # original_value_prefix, reward_hidden = self.lstm(x, reward_hidden)
+        # original_value_prefix = original_value_prefix.squeeze(0)
+        # value_prefix_list = [net(original_value_prefix) for net in self.bn_value_prefix_nets]
+        # value_prefix_list = [nn.functional.relu(value_prefix) for value_prefix in value_prefix_list]
+
+        #Otherwise:
+        value_prefix, reward_hidden = self.lstm(x, reward_hidden)
+        value_prefix = value_prefix.squeeze(0)
+        value_prefix = self.bn_value_prefix(value_prefix)
+        value_prefix = nn.functional.relu(value_prefix)
+        if self.use_network_prior:
+            value_prefix_list = [fc_net(value_prefix) + self.prior_scale * prior_fc_net(value_prefix.detach()).detach() for fc_net, prior_fc_net in zip(self.fc_nets, self.prior_fc_nets)]
+        else:
+            value_prefix_list = [fc_net(value_prefix) for fc_net in self.fc_nets]
 
         return state, reward_hidden, value_prefix_list
 
     def get_reward_mean(self):
         reward_w_dist = self.conv1x1_reward.weight.detach().cpu().numpy().reshape(-1)
-
-        # Iterate over the first network to get the tensor of the right size
-        for name, param in self.fc_nets[0].named_parameters():
-            temp_weights = param.detach().cpu().numpy().reshape(-1)
-            reward_w_dist = np.concatenate((reward_w_dist, temp_weights))
-        reward_mean = np.abs(reward_w_dist).mean()
-
-        # Iterate over the rest of the networks:
-        for net_index in range(1, len(self.fc_nets)):
-            for name, param in self.fc_nets[net_index].named_parameters():
+        return_reward_w_dist = None
+        for index, fc_net in enumerate(self.fc_nets):
+            for name, param in fc_net.named_parameters():
                 temp_weights = param.detach().cpu().numpy().reshape(-1)
                 reward_w_dist = np.concatenate((reward_w_dist, temp_weights))
-            reward_mean += np.abs(reward_w_dist).mean()
-        return reward_w_dist, reward_mean / len(self.fc_nets)
+            if index == 0:
+                return_reward_w_dist = reward_w_dist
+
+        reward_mean = np.abs(reward_w_dist).mean()
+
+        return return_reward_w_dist, reward_mean
 
 class EnsemblePredictionNetwork(PredictionNetwork):
     def __init__(
@@ -880,10 +892,15 @@ class EnsemblePredictionNetwork(PredictionNetwork):
         self.ensemble_size = ensemble_size
         self.prior_scale = prior_scale
         self.use_network_prior = use_network_prior
-        self.bn_value_nets = nn.ModuleList([nn.BatchNorm2d(reduced_channels_value, momentum=momentum) for _ in range(ensemble_size)])
+        # self.bn_value_nets = nn.ModuleList([nn.BatchNorm2d(reduced_channels_value, momentum=momentum) for _ in range(ensemble_size)])
         # self.bn_value = None
         self.fc_value_nets = nn.ModuleList([mlp(self.block_output_size_value, fc_value_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
-        # self.fc_value = None
+        self.fc_value = None
+
+        if self.use_network_prior:
+            self.prior_fc_value_nets = nn.ModuleList([mlp(self.block_output_size_value, fc_value_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
+        else:
+            self.prior_fc_value_nets = None
 
     def forward(self, x):
         """
@@ -891,18 +908,40 @@ class EnsemblePredictionNetwork(PredictionNetwork):
         """
         for block in self.resblocks:
             x = block(x)
+        value_after_conv = self.conv1x1_value(x)
+        # If the bn layers are not ensembled:
+        if self.bn_value is not None:
+            value = self.bn_value(value_after_conv)
+            value = nn.functional.relu(value)
+        else:
+            values = [bn_value_net(value_after_conv) for bn_value_net in self.bn_value_nets]
+            values = [nn.functional.relu(value) for value in values]
 
         policy = self.conv1x1_policy(x)
         policy = self.bn_policy(policy)
         policy = nn.functional.relu(policy)
+
+        # If the bn layers are not ensembled:
+        if self.bn_value is not None:
+            value = value.view(-1, self.block_output_size_value)
+        else:
+            values = [value.view(-1, self.block_output_size_value) for value in values]
         policy = policy.view(-1, self.block_output_size_policy)
+
+        # If the bn layers are not ensembled:
+        if self.bn_value is not None:
+            if self.use_network_prior:
+                # This can also be done with torch.no_grad()
+                values = [fc_value_net(value) + self.prior_scale * prior_fc_value_net(value.detach()).detach() for fc_value_net, prior_fc_value_net in zip(self.fc_value_nets, self.prior_fc_value_nets)]
+            else:
+                values = [fc_value_net(value) for fc_value_net in self.fc_value_nets]
+        else:
+            if self.use_network_prior:
+                # This can also be done with torch.no_grad()
+                values = [fc_value_net(value) + self.prior_scale * prior_fc_value_net(value.detach()).detach() for fc_value_net, prior_fc_value_net, value in zip(self.fc_value_nets, self.prior_fc_value_nets, values)]
+            else:
+                values = [fc_value_net(value) for fc_value_net, value in zip(self.fc_value_nets, values)]
+
         policy = self.fc_policy(policy)
-
-        # this part of value prediction is not ensmebled
-        value_after_conv = self.conv1x1_value(x)
-
-        values = [bn_value_net(value_after_conv) for bn_value_net in self.bn_value_nets]
-        values = [value.view(-1, self.block_output_size_value) for value in values]
-        values = [fc_value_net(value) for fc_value_net, value in zip(self.fc_value_nets, values)]
 
         return policy, values

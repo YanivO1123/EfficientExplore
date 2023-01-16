@@ -100,7 +100,11 @@ class BaseNet(nn.Module):
         value_prefix_variance = None
 
         if not self.training:
-            # TODO: Add computation of actual variance from the list value, these are placeholder zeros
+            #MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
+            if isinstance(value, list):  # If the ensemble arch. is used
+                value_variance = self.ensemble_prediction_to_variance(value).detach().cpu().numpy()
+            value_prefix_variance = [0. for _ in range(num)]
+
             # if not in training, obtain the scalars of the value/reward
             value = self.inverse_value_transform(value).detach().cpu().numpy()
             state = state.detach().cpu().numpy()
@@ -109,37 +113,39 @@ class BaseNet(nn.Module):
             reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).detach().cpu().numpy(),
                              torch.zeros(1, num, self.lstm_hidden_size).detach().cpu().numpy())
 
-            #TODO: These are placeholders
-            value_variance = np.zeros_like(value)
-            value_prefix_variance = [0. for _ in range(num)]
-
+            # #TODO: These are placeholders
+            # value_variance = np.zeros_like(value)
         else:
             # zero initialization for reward (value prefix) hidden states
             reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).to('cuda'), torch.zeros(1, num, self.lstm_hidden_size).to('cuda'))
-            # The variances are not used throughout training, so we should be able to safely return Nones
-
 
         return NetworkOutput(value, [0. for _ in range(num)], actor_logit, state, reward_hidden, value_variance, value_prefix_variance)
 
     def recurrent_inference(self, hidden_state, reward_hidden, action) -> NetworkOutput:
         state, reward_hidden, value_prefix = self.dynamics(hidden_state, reward_hidden, action)
         actor_logit, value = self.prediction(state)
+
         #MuExplore: Setup the uncertainty return values, which are only relevant when not-training
         value_variance = None
         value_prefix_variance = None
 
         if not self.training:
-            # TODO: Add call to the NN variance computation. Should be here, because after the calls to
-            #  inverse_value_transform will already return the mean of the prediction
+            # MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
+            if isinstance(value, list): # If the ensemble arch. is used
+                value_variance = self.ensemble_prediction_to_variance(value).detach().cpu().numpy()
+            if isinstance(value_prefix, list):  # If the ensemble arch. is used
+                value_prefix_variance = self.ensemble_prediction_to_variance(value_prefix).detach().cpu().numpy()
+
             # if not in training, obtain the scalars of the value/reward
             value = self.inverse_value_transform(value).detach().cpu().numpy()
             value_prefix = self.inverse_reward_transform(value_prefix).detach().cpu().numpy()
             state = state.detach().cpu().numpy()
             reward_hidden = (reward_hidden[0].detach().cpu().numpy(), reward_hidden[1].detach().cpu().numpy())
             actor_logit = actor_logit.detach().cpu().numpy()
-            # TODO: Placeholder for uncertainty computation.
-            value_variance = np.ones_like(value) * 100
-            value_prefix_variance = np.ones_like(value_prefix) * 100
+
+            # TODO: These are placeholders
+            # value_variance = np.ones_like(value) * 100
+            # value_prefix_variance = np.ones_like(value_prefix) * 100
 
         return NetworkOutput(value, value_prefix, actor_logit, state, reward_hidden, value_variance, value_prefix_variance)
 
