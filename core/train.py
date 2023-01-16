@@ -359,13 +359,13 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
     if config.use_augmentation:
         config.set_transforms()
 
-    print("Started collecting data to start training")
+    print("Started collecting data to start training", flush=True)
 
     # wait until collecting enough data to start
     while not (ray.get(replay_buffer.get_total_len.remote()) >= config.start_transitions):
         time.sleep(1)
         pass
-    print('Begin training...')
+    print('Begin training...', flush=True)
     # set signals for other workers
     shared_storage.set_start_signal.remote()
 
@@ -454,9 +454,8 @@ def train(config, summary_writer, model_path=None):
           f"Exploration params: \n"
           f"Use MuExplore in MCTS: {config.mu_explore} \n"
           f"Beta value = {config.beta} \n"
-          f"Disable policy usage in exploration: {config.disable_policy_in_exploration} \n"
-          )
-    print("Starting workers")
+          f"Disable policy usage in exploration: {config.disable_policy_in_exploration} \n\n"
+          f"Starting workers", flush=True)
 
     storage = SharedStorage.remote(model, target_model)
 
@@ -469,25 +468,25 @@ def train(config, summary_writer, model_path=None):
     workers = []
 
     # reanalyze workers
-    print("Starting Reanalyze workers")
+    print("Starting Reanalyze workers", flush=True)
     cpu_workers = [BatchWorker_CPU.remote(idx, replay_buffer, storage, batch_storage, mcts_storage, config) for idx in range(config.cpu_actor)]
     workers += [cpu_worker.run.remote() for cpu_worker in cpu_workers]
     gpu_workers = [BatchWorker_GPU.remote(idx, replay_buffer, storage, batch_storage, mcts_storage, config) for idx in range(config.gpu_actor)]
     workers += [gpu_worker.run.remote() for gpu_worker in gpu_workers]
 
     # self-play workers
-    print("Starting data_workers")
+    print("Starting data_workers", flush=True)
     data_workers = [DataWorker.remote(rank, replay_buffer, storage, config) for rank in range(0, config.num_actors)]
     workers += [worker.run.remote() for worker in data_workers]
     # test workers
-    print("Starting test workers")
+    print("Starting test workers", flush=True)
     workers += [_test.remote(config, storage)]
 
     # training loop
-    print("Calling _train")
+    print("Calling _train", flush=True)
     final_weights = _train(model, target_model, replay_buffer, storage, batch_storage, config, summary_writer)
 
     ray.wait(workers)
-    print('Training over...')
+    print('Training over...', flush=True)
 
     return model, final_weights

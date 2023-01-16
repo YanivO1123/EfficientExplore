@@ -23,7 +23,7 @@ class MCTS(object):
         """
         with torch.no_grad():
             model.eval()
-
+            
             # preparation
             num = roots.num
             device = self.config.device
@@ -80,8 +80,8 @@ class MCTS(object):
                 value_pool = network_output.value.reshape(-1).tolist()
                 policy_logits_pool = network_output.policy_logits.tolist()
                 reward_hidden_nodes = network_output.reward_hidden
-                value_prefix_variance_pool = network_output.value_prefix_variance.reshape(-1).tolist()
-                value_variance_pool = network_output.value_variance.reshape(-1).tolist()
+                value_prefix_variance_pool = network_output.value_prefix_variance.reshape(-1).tolist() if network_output.value_prefix_variance is not None else None
+                value_variance_pool = network_output.value_variance.reshape(-1).tolist() if network_output.value_variance is not None else None
 
                 hidden_state_pool.append(hidden_state_nodes)
                 # reset 0
