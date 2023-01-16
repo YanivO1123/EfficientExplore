@@ -10,6 +10,8 @@ from core.mcts import MCTS
 from core.model import concat_output, concat_output_value
 from core.utils import prepare_observation_lst, LinearSchedule
 
+import traceback
+
 
 @ray.remote
 class BatchWorker_CPU(object):
@@ -270,6 +272,7 @@ class BatchWorker_CPU(object):
                 try:
                     self.make_batch(batch_context, self.config.revisit_policy_search_rate, weights=target_weights)
                 except:
+                    traceback.print_exc()
                     print('Data is deleted...')
                     time.sleep(0.1)
 

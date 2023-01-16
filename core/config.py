@@ -440,6 +440,30 @@ class BaseConfig(object):
         self.p_mcts_num = args.p_mcts_num
         self.use_root_value = args.use_root_value
 
+        # Setup config. for the cluster
+        if args.cluster:
+            # Batch size
+            self.batch_size = 256
+            # Base network arch.
+            self.lstm_hidden_size = 512
+            self.proj_hid = 1024
+            self.proj_out = 1024
+            self.pred_hid = 512
+            self.pred_out = 1024
+            # MuExplore
+            # Ensemble network arch.
+            self.ensemble_size = 5
+
+        # Setup MuExplore params from command line
+        if args.beta is not None and args.beta >= 0:
+            self.beta = args.beta
+        elif args.beta is not None and args.beta < 0:
+            print(f"In parameter setup, received illegal beta value < 0. Setting the currently configured default beta "
+                  f"instead: beta = {self.beta}")
+        self.mu_explore = args.mu_explore
+        self.use_uncertainty_architecture = args.uncertainty_architecture
+        self.disable_policy_in_exploration = args.disable_policy_in_exploration
+
         if not self.do_consistency:
             self.consistency_coeff = 0
             self.augmentation = None
@@ -469,7 +493,12 @@ class BaseConfig(object):
 
         localtime = time.asctime(time.localtime(time.time()))
         seed_tag = 'seed={}'.format(self.seed)
+
+        # Setup path
         self.exp_path = os.path.join(args.result_dir, args.case, args.info, args.env, seed_tag, localtime)
+        if args.cluster:
+            cluster_results_path = os.path.join("/scratch/yanivoren/efficient_explore_results/", 'results')
+            self.exp_path = os.path.join(cluster_results_path, args.case, args.info, args.env, seed_tag, localtime)
 
         self.model_path = os.path.join(self.exp_path, 'model.p')
         self.model_dir = os.path.join(self.exp_path, 'model')

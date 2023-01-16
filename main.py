@@ -53,6 +53,17 @@ if __name__ == '__main__':
     parser.add_argument('--load_model', action='store_true', default=False, help='choose to load model')
     parser.add_argument('--model_path', type=str, default='./results/test_model.p', help='load model path')
     parser.add_argument('--object_store_memory', type=int, default=150 * 1024 * 1024 * 1024, help='object store memory')
+    parser.add_argument('--cluster', action='store_true', default=False,
+                        help="Is used for switching experiment configurations between debugging (local, False) and final "
+                             "(computation cluster, True)")
+    parser.add_argument('--beta', type=float, default=None, help='Exploration / exploitation parameter, takes float >= 0')
+    parser.add_argument('--mu_explore', action='store_true', default=False,
+                        help="Use MuExplore (exploratory MCTS), or not.")
+    parser.add_argument('--uncertainty_architecture', action='store_true', default=False,
+                        help="Use uncertainty_architecture (ensemble), or not.")
+    parser.add_argument('--disable_policy_in_exploration', action='store_true', default=False,
+                        help="If using MuExplore, disable policy-prior node scores in MCTS search in exploration episodes. "
+                             "If false, can be too policy-biased and not provide effective exploration.")
 
     # Process arguments
     args = parser.parse_args()
@@ -61,9 +72,13 @@ if __name__ == '__main__':
         ' Revisit policy search rate should be in [0,1]'
 
     if args.opr == 'train':
-        os.environ["RAY_memory_monitor_refresh_ms"] = "0"
-        ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus)#,
-                 # object_store_memory=args.object_store_memory)
+        if args.cluster:
+            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus,
+                object_store_memory=args.object_store_memory)
+        else:
+            # os.environ["RAY_memory_monitor_refresh_ms"] = "0"
+            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus)#,
+                     # object_store_memory=args.object_store_memory, RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE=1)
     else:
         ray.init()
 

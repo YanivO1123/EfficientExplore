@@ -12,15 +12,16 @@ from core.mcts import MCTS
 from core.game import GameHistory
 from core.utils import select_action, prepare_observation_lst
 
-import core
-
 @ray.remote(num_gpus=0.25)
 def _test(config, shared_storage):
+    print(f"_test function called")
     test_model = config.get_uniform_network()
     best_test_score = float('-inf')
     episodes = 0
     while True:
         counter = ray.get(shared_storage.get_counter.remote())
+        if counter == 0:
+            print(f"Counter = 0!")
         if counter >= config.training_steps + config.last_steps:
             time.sleep(30)
             break
@@ -75,6 +76,8 @@ def test(config, model, counter, test_episodes, device, render, save_video=False
     model.eval()
     save_path = os.path.join(config.exp_path, 'recordings', 'step_{}'.format(counter))
 
+    print(f"Test function called. counter = {counter}")
+
     with torch.no_grad():
         # new games
         envs = [config.new_game(seed=i, save_video=save_video, save_path=save_path, test=True, final_test=final_test,
@@ -92,6 +95,9 @@ def test(config, model, counter, test_episodes, device, render, save_video=False
         step = 0
         ep_ori_rewards = np.zeros(test_episodes)
         ep_clip_rewards = np.zeros(test_episodes)
+
+        print(f"In function Test, calling interaction with environment loop. counter = {counter}")
+
         # loop
         while not dones.all():
             if render:
@@ -150,6 +156,7 @@ def test(config, model, counter, test_episodes, device, render, save_video=False
                                              ep_ori_rewards.mean(), ep_ori_rewards.max(), ep_ori_rewards.min()))
                 pb.update(1)
 
+        print(f"In function Test, finished testing for {test_episodes} episodes. counter = {counter}")
         for env in envs:
             env.close()
 
