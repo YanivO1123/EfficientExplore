@@ -66,7 +66,9 @@ cdef class Roots:
     def get_distributions(self):
         return self.roots[0].get_distributions()
 
-    #TODO: consider adding get_values_uncertainty function, although i dont have in cnode!
+    def get_values_uncertainty(self):
+        return self.roots[0].get_values_uncertainty()
+
     def get_values(self):
         return self.roots[0].get_values()
 

@@ -78,6 +78,8 @@ namespace tree {
             std::vector<std::vector<int>> get_trajectories();
             std::vector<std::vector<int>> get_distributions();
             std::vector<float> get_values();
+            //MuExplore: Returns the value-uncertainty of the nodes
+            std::vector<float> get_values_uncertainty();
 
     };
 

@@ -121,6 +121,7 @@ class DataWorker(object):
         total_transitions = 0
         # max transition to collect for this data worker
         max_transitions = self.config.total_transitions // self.config.num_actors
+
         with torch.no_grad():
             while True:
                 trained_steps = ray.get(self.storage.get_counter.remote())
@@ -304,6 +305,13 @@ class DataWorker(object):
 
                     roots_distributions = roots.get_distributions()
                     roots_values = roots.get_values()
+                    if total_transitions % (self.config.log_interval / 4) == 0:
+                        if self.config.mu_explore:
+                            root_values_uncertainties =  roots.get_values_uncertainty()
+                            print(f"Printing root-values and root-values-uncertainties at transition number {total_transitions}. \n"
+                                  f"roots_values = {roots_values} \n"
+                                  f"root_values_uncertainties = {root_values_uncertainties} \n", flush=True)
+
                     for i in range(env_nums):
                         deterministic = False
                         if start_training:

@@ -418,6 +418,15 @@ namespace tree{
         return values;
     }
 
+    //MuExplore: Returns the value-uncertainty of the nodes
+    std::vector<float> CRoots::get_values_uncertainty(){
+        std::vector<float> values_uncertainty;
+        for(int i = 0; i < this->root_num; ++i){
+            values_uncertainty.push_back(this->roots[i].value_uncertainty());
+        }
+        return values_uncertainty;
+    }
+
     //*********************************************************
 
     void update_tree_q(CNode* root, tools::CMinMaxStats &min_max_stats, float discount){

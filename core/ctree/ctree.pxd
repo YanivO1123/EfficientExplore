@@ -54,7 +54,8 @@ cdef extern from "cnode.h" namespace "tree":
 
         int expanded()
         float value()
-        #TODO: Consider adding new value_uncertainty() function declaration
+        #MuExplore: get value_uncertainty of node
+        float value_uncertainty()
         vector[int] get_trajectory()
         vector[int] get_children_distribution()
         CNode* get_child(int action)
@@ -75,7 +76,7 @@ cdef extern from "cnode.h" namespace "tree":
         vector[vector[int]] get_trajectories()
         vector[vector[int]] get_distributions()
         vector[float] get_values()
-        #TODO: Consider adding new get_values_uncertainties() function declaration, although i dont have in cnode!
+        vector[float] get_values_uncertainty()
 
     cdef cppclass CSearchResults:
         CSearchResults() except +
