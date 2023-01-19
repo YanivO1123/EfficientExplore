@@ -1,7 +1,7 @@
 import ray
 import time
 import torch
-
+import os
 import numpy as np
 import core.ctree.cytree as cytree
 
@@ -311,6 +311,8 @@ class DataWorker(object):
                             print(f"Printing root-values and root-values-uncertainties at transition number {total_transitions}. \n"
                                   f"roots_values = {roots_values} \n"
                                   f"root_values_uncertainties = {root_values_uncertainties} \n", flush=True)
+                    if total_transitions % 20000 == 0:
+                        os.system("nvidia-smi")
 
                     for i in range(env_nums):
                         deterministic = False

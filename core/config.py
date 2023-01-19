@@ -253,7 +253,7 @@ class BaseConfig(object):
         # Root prior exploration noise.
         self.value_delta_max = value_delta_max
         self.root_dirichlet_alpha = dirichlet_alpha
-        self.root_exploration_fraction = 0.25
+        self.root_exploration_fraction = 0.25   # original: 0.25, first attempt reduced: 0.1
 
         # UCB formula
         self.pb_c_base = 19652
@@ -456,7 +456,7 @@ class BaseConfig(object):
 
         # Setup MuExplore params from command line
         if args.beta is not None and args.beta >= 0:
-            self.beta = args.beta
+            self.beta = args.beta * 1.0
         elif args.beta is not None and args.beta < 0:
             print(f"In parameter setup, received illegal beta value < 0. Setting the currently configured default beta "
                   f"instead: beta = {self.beta}")

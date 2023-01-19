@@ -52,7 +52,7 @@ if __name__ == '__main__':
     parser.add_argument('--info', type=str, default='none', help='debug string')
     parser.add_argument('--load_model', action='store_true', default=False, help='choose to load model')
     parser.add_argument('--model_path', type=str, default='./results/test_model.p', help='load model path')
-    parser.add_argument('--object_store_memory', type=int, default=150 * 1024 * 1024 * 1024, help='object store memory')
+    parser.add_argument('--object_store_memory', type=int, default=None, help='object store memory') # original default=150 * 1024 * 1024 * 1024
     parser.add_argument('--cluster', action='store_true', default=False,
                         help="Is used for switching experiment configurations between debugging (local, False) and final "
                              "(computation cluster, True)")
@@ -72,13 +72,11 @@ if __name__ == '__main__':
         ' Revisit policy search rate should be in [0,1]'
 
     if args.opr == 'train':
-        if args.cluster:
+        if args.object_store_memory is not None:
             ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus,
-                object_store_memory=args.object_store_memory)
+                object_store_memory=args.object_store_memory) # , RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE=1)
         else:
-            # os.environ["RAY_memory_monitor_refresh_ms"] = "0"
-            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus)#,
-                     # object_store_memory=args.object_store_memory, RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE=1)
+            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus)
     else:
         ray.init()
 
