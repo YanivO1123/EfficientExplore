@@ -463,6 +463,7 @@ class BaseConfig(object):
         self.mu_explore = args.mu_explore
         self.use_uncertainty_architecture = args.uncertainty_architecture
         self.disable_policy_in_exploration = args.disable_policy_in_exploration
+        self.root_exploration_fraction = args.exploration_fraction
 
         if not self.do_consistency:
             self.consistency_coeff = 0
