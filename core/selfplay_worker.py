@@ -2,9 +2,10 @@ import ray
 import time
 import torch
 import os
+import traceback
 import numpy as np
 import core.ctree.cytree as cytree
-
+import math
 from torch.nn import L1Loss
 from torch.cuda.amp import autocast as autocast
 from core.mcts import MCTS
@@ -121,6 +122,9 @@ class DataWorker(object):
         total_transitions = 0
         # max transition to collect for this data worker
         max_transitions = self.config.total_transitions // self.config.num_actors
+
+        # Organized as: max, min, sum
+        value_max, value_unc_max, value_min, value_unc_min, value_sum, value_unc_sum = -math.inf, -math.inf, math.inf, math.inf, 0, 0
 
         with torch.no_grad():
             while True:
@@ -305,12 +309,7 @@ class DataWorker(object):
 
                     roots_distributions = roots.get_distributions()
                     roots_values = roots.get_values()
-                    if total_transitions % (self.config.log_interval / 4) == 0:
-                        if self.config.mu_explore:
-                            root_values_uncertainties =  roots.get_values_uncertainty()
-                            print(f"Printing root-values and root-values-uncertainties at transition number {total_transitions}. \n"
-                                  f"roots_values = {roots_values} \n"
-                                  f"root_values_uncertainties = {root_values_uncertainties} \n", flush=True)
+
                     if total_transitions % 20000 == 0:
                         os.system("nvidia-smi")
 
@@ -369,6 +368,23 @@ class DataWorker(object):
                             game_histories[i] = GameHistory(envs[i].env.action_space, max_length=self.config.history_length,
                                                             config=self.config)
                             game_histories[i].init(stack_obs_windows[i])
+
+                    if self.config.mu_explore:
+                        root_values_uncertainties = roots.get_values_uncertainty()
+                        value_max = max(value_max, np.max(roots_values))
+                        value_min = min(value_min, np.min(roots_values))
+                        value_sum += sum(roots_values)
+                        value_unc_max = max(value_unc_max, np.max(root_values_uncertainties))
+                        value_unc_min = min(value_unc_min, np.min(root_values_uncertainties))
+                        value_unc_sum += sum(root_values_uncertainties)
+                        if (total_transitions - self.config.p_mcts_num) % (self.config.test_interval) == 0:
+                            print(f"Printing root-values and root-values-uncertainties statistics at transition number "
+                                  f"{total_transitions}: \n"
+                                  f"values: max = {value_max}, min: {value_min}, mean: "
+                                  f"{value_sum / total_transitions} \n"
+                                  f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
+                                  f"{value_unc_sum} \n"
+                                  , flush=True)
 
                 for i in range(env_nums):
                     env = envs[i]

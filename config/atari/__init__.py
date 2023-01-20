@@ -91,8 +91,8 @@ class AtariConfig(BaseConfig):
         self.reduced_channels_reward = 16  # x36 Number of channels in reward head
         self.reduced_channels_value = 16  # x36 Number of channels in value head
         self.reduced_channels_policy = 16  # x36 Number of channels in policy head
-        self.resnet_fc_reward_layers = [32]  # Define the hidden layers in the reward head of the dynamic network
-        self.resnet_fc_value_layers = [32]  # Define the hidden layers in the value head of the prediction network
+        self.resnet_fc_reward_layers = [32, 32] # [32] # Define the hidden layers in the reward head of the dynamic network
+        self.resnet_fc_value_layers = [32, 32] # [32] # Define the hidden layers in the value head of the prediction network
         self.resnet_fc_policy_layers = [32]  # Define the hidden layers in the policy head of the prediction network
         self.downsample = True  # Downsample observations before representation network (See paper appendix Network Architecture)
 

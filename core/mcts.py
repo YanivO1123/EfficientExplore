@@ -23,7 +23,6 @@ class MCTS(object):
         """
         with torch.no_grad():
             model.eval()
-            
             # preparation
             num = roots.num
             device = self.config.device
@@ -101,8 +100,8 @@ class MCTS(object):
                 #MuExplore: Backprop. w. uncertainty
                 if self.config.mu_explore:
                     if self.config.disable_policy_in_exploration:
-                        policy_logits_pool = [policy_logits_pool[0]] + [np.ones_like(policy_logits_pool[0]).tolist() for _ in range(len(policy_logits_pool)-1)]
-                    #TODO: Consider passing uniformed policy_logits_pool for all but the first env
+                        len_logits = len(policy_logits_pool[0])
+                        policy_logits_pool = [policy_logits_pool[0]] + [[1.0] * len_logits for _ in range(len(policy_logits_pool) - 1)]
                     tree.uncertainty_batch_back_propagate(hidden_state_index_x, discount,
                                               value_prefix_pool, value_pool, policy_logits_pool,
                                               min_max_stats_lst, results, is_reset_lst,
