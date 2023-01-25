@@ -493,7 +493,12 @@ class BaseConfig(object):
             self.revisit_policy_search_rate = args.revisit_policy_search_rate
 
         localtime = time.asctime(time.localtime(time.time()))
-        seed_tag = 'seed={}'.format(self.seed)
+        if self.mu_explore:
+            seed_tag = 'mu_explore_seed={}'.format(self.seed)
+        elif self.use_uncertainty_architecture:
+            seed_tag = 'ensemble_baseline_seed={}'.format(self.seed)
+        else:
+            seed_tag = 'baseline_seed={}'.format(self.seed)
 
         # Setup path
         self.exp_path = os.path.join(args.result_dir, args.case, args.info, args.env, seed_tag, localtime)

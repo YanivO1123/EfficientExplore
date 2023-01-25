@@ -110,9 +110,13 @@ def test(config, model, counter, test_episodes, device, render, save_video=False
                     stack_obs.append(game_history.step_obs())
                 stack_obs = prepare_observation_lst(stack_obs)
                 stack_obs = torch.from_numpy(stack_obs).to(device).float() / 255.0
+            elif 'deep_sea' in config.env_name:
+                stack_obs = [game_history.step_obs() for game_history in game_histories]
+                stack_obs = prepare_observation_lst(stack_obs)
+                stack_obs = torch.from_numpy(stack_obs).to(device).float()
             else:
                 stack_obs = [game_history.step_obs() for game_history in game_histories]
-                stack_obs = torch.from_numpy(np.array(stack_obs)).to(device)
+                stack_obs = torch.from_numpy(np.array(stack_obs)).to(device).float()
 
             with autocast():
                 network_output = model.initial_inference(stack_obs.float())

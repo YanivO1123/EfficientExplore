@@ -52,6 +52,11 @@ class GameHistory:
         self.action_space_size = config.action_space_size
         self.zero_obs_shape = (config.obs_shape[-2], config.obs_shape[-1], config.image_channel)
 
+        # Numpy does not deal with dimensions of size 1 correctly, so we need to give it a zero shape without channel
+        # dim of size 1
+        if "deep_sea" in self.config.env_name:
+            self.zero_obs_shape = (config.obs_shape[-2], config.obs_shape[-1])
+
         self.child_visits = []
         self.root_values = []
 

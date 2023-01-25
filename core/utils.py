@@ -5,8 +5,10 @@ import torch
 import random
 import shutil
 import logging
-
 import numpy as np
+
+import bsuite
+from bsuite.utils import gym_wrapper as bsuite_gym_wrapper
 
 from scipy.stats import entropy
 
@@ -239,6 +241,10 @@ def make_atari(env_id, skip=4, max_episode_steps=None):
         env = TimeLimit(env, max_episode_steps=max_episode_steps)
     return env
 
+def make_deepsea(env_id):
+    env = bsuite.load_from_id(env_id)
+    env = bsuite_gym_wrapper.GymFromDMEnv(env)
+    return env
 
 def set_seed(seed):
     # set seed
@@ -305,14 +311,16 @@ def select_action(visit_counts, temperature=1, deterministic=True):
 
 
 def prepare_observation_lst(observation_lst):
-    """Prepare the observations to satisfy the input fomat of torch
+    """Prepare the observations to satisfy the input format of torch
     [B, S, W, H, C] -> [B, S x C, W, H]
     batch, stack num, width, height, channel
     """
     # B, S, W, H, C
     observation_lst = np.array(observation_lst, dtype=np.uint8)
+    # If observation_lst is already in the right shape:
+    if len(np.shape(observation_lst)) < 5:
+        return observation_lst
     observation_lst = np.moveaxis(observation_lst, -1, 2)
-
     shape = observation_lst.shape
     observation_lst = observation_lst.reshape((shape[0], -1, shape[-2], shape[-1]))
 

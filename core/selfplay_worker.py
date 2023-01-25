@@ -3,6 +3,7 @@ import time
 import torch
 import os
 import traceback
+from bsuite import sweep
 import numpy as np
 import core.ctree.cytree as cytree
 import math
@@ -271,8 +272,10 @@ class DataWorker(object):
                     if self.config.image_based:
                         stack_obs = prepare_observation_lst(stack_obs)
                         stack_obs = torch.from_numpy(stack_obs).to(self.device).float() / 255.0
+                    elif "deep_sea" in self.config.env_name:
+                        stack_obs = prepare_observation_lst(stack_obs)
+                        stack_obs = torch.from_numpy(stack_obs).to(self.device).float()
                     else:
-                        stack_obs = [game_history.step_obs() for game_history in game_histories]
                         stack_obs = torch.from_numpy(np.array(stack_obs)).to(self.device)
 
                     if self.config.amp_type == 'torch_amp':
@@ -374,16 +377,16 @@ class DataWorker(object):
                         value_max = max(value_max, np.max(roots_values))
                         value_min = min(value_min, np.min(roots_values))
                         value_sum += sum(roots_values)
-                        value_unc_max = max(value_unc_max, np.max(root_values_uncertainties))
-                        value_unc_min = min(value_unc_min, np.min(root_values_uncertainties))
-                        value_unc_sum += sum(root_values_uncertainties)
+                        value_unc_max = max(value_unc_max, np.max(root_values_uncertainties[1:]))
+                        value_unc_min = min(value_unc_min, np.min(root_values_uncertainties[1:]))
+                        value_unc_sum += sum(root_values_uncertainties[1:])
                         if (total_transitions - self.config.p_mcts_num) % (self.config.test_interval) == 0:
                             print(f"Printing root-values and root-values-uncertainties statistics at transition number "
                                   f"{total_transitions}: \n"
                                   f"values: max = {value_max}, min: {value_min}, mean: "
                                   f"{value_sum / total_transitions} \n"
                                   f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
-                                  f"{value_unc_sum} \n"
+                                  f"{value_unc_sum / (total_transitions * 3 / 4) } \n"
                                   , flush=True)
 
                 for i in range(env_nums):

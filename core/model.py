@@ -93,7 +93,7 @@ class BaseNet(nn.Module):
 
     def initial_inference(self, obs) -> NetworkOutput:
         num = obs.size(0)
-
+        
         state = self.representation(obs)
         actor_logit, value = self.prediction(state)
         value_variance = None
@@ -112,9 +112,6 @@ class BaseNet(nn.Module):
             # zero initialization for reward (value prefix) hidden states
             reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).detach().cpu().numpy(),
                              torch.zeros(1, num, self.lstm_hidden_size).detach().cpu().numpy())
-
-            # #TODO: These are placeholders
-            # value_variance = np.zeros_like(value)
         else:
             # zero initialization for reward (value prefix) hidden states
             reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).to('cuda'), torch.zeros(1, num, self.lstm_hidden_size).to('cuda'))
@@ -142,10 +139,6 @@ class BaseNet(nn.Module):
             state = state.detach().cpu().numpy()
             reward_hidden = (reward_hidden[0].detach().cpu().numpy(), reward_hidden[1].detach().cpu().numpy())
             actor_logit = actor_logit.detach().cpu().numpy()
-
-            # TODO: These are placeholders
-            # value_variance = np.ones_like(value) * 100
-            # value_prefix_variance = np.ones_like(value_prefix) * 100
 
         return NetworkOutput(value, value_prefix, actor_logit, state, reward_hidden, value_variance, value_prefix_variance)
 
