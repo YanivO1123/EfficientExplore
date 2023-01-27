@@ -299,8 +299,8 @@ def select_action(visit_counts, temperature=1, deterministic=True):
         False -> sample from the distribution
     """
     # If temperature is about zero, return the argmax
-    if temperature < 0.0001:
-        action_probs = [visit_count_i ** (1 / 0.0001) for visit_count_i in visit_counts]
+    if temperature < 0.001:
+        action_probs = [visit_count_i ** (1 / 0.1) for visit_count_i in visit_counts]
         count_entropy = entropy(action_probs, base=2)
         action_pos = np.argmax([v for v in visit_counts])
         return action_pos, count_entropy
