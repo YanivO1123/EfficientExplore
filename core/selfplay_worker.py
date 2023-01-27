@@ -280,7 +280,7 @@ class DataWorker(object):
                     if self.config.use_visitation_counter and self.visitation_counter is not None:
                         # Take the last of observation of stacked obs, from shape (num_envs, stack_obs, h, w)
                         # to shape (num_envs, h, w)
-                        initial_observations_for_counter = np.array(stack_obs, dtype=np.uint8)[:,-1,:,:]
+                        initial_observations_for_counter = self.visitation_counter.from_one_hot_state_to_indexes(np.array(stack_obs, dtype=np.uint8)[:,-1,:,:])
                     if self.config.image_based:
                         stack_obs = prepare_observation_lst(stack_obs)
                         stack_obs = torch.from_numpy(stack_obs).to(self.device).float() / 255.0
@@ -330,7 +330,7 @@ class DataWorker(object):
                     roots_distributions = roots.get_distributions()
                     roots_values = roots.get_values()
 
-                    if total_transitions % 20000 == 0:
+                    if total_transitions % self.config.test_interval == 0:
                         os.system("nvidia-smi")
 
                     for i in range(env_nums):
@@ -416,7 +416,8 @@ class DataWorker(object):
                                   f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
                                   f"{value_unc_sum / (total_transitions * 3 / 4) } \n"
                                   , flush=True)
-                            print(f"Printing the state visitation counter: \n"
+                            print(f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
+                                  f"Printing the state visitation counter: \n"
                                   f"{self.visitation_counter.s_counts}"
                                   , flush=True)
 

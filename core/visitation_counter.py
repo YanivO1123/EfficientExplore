@@ -36,14 +36,27 @@ class CountUncertainty:
             Takes a numpy array, one-hot encoded state of shape (h, w) and returns the indexes of the 1 in the encoding
             If state is the "null state" (all zeros), returns negative indexes
         """
-        assert len(np.shape(state)) == 2
-        # If the given state is the "null state" (outside of env bounds)
-        if not state.any():
-            return -1, -1
+        if len(np.shape(state)) == 2:
+            # If the given state is the "null state" (outside of env bounds)
+            if not state.any():
+                return -1, -1
+            else:
+                indexes = (state == 1).nonzero()
+                index_row, index_column = indexes[0][0], indexes[1][0]
+                return index_row, index_column
+        elif len(np.shape(state)) == 3:
+            # If the given state is the "null state" (outside of env bounds)
+            indexes_of_states = []
+            for i in range(np.shape(state)[0]):
+                if not state[i].any():
+                    indexes_of_states.append([-1, -1])
+                else:
+                    indexes = (state[i] == 1).nonzero()
+                    index_row, index_column = indexes[0][0], indexes[1][0]
+                    indexes_of_states.append([index_row, index_column])
+            return indexes_of_states
         else:
-            indexes = (state == 1).nonzero()
-            index_row, index_column = indexes[0][0], indexes[1][0]
-            return index_row, index_column
+            raise ValueError(f"from_one_hot_state_to_indexes is not ")
 
     def observe(self, state, action):
         """ Add counts for observed 'state' (observations from deep_sea, which are also the true state).
@@ -77,8 +90,9 @@ class CountUncertainty:
                 self.planning_envs[i]._row = indexes[i][0]
                 self.planning_envs[i]._column = indexes[i][1]
 
-                # get them to step to the next state
-                _ = self.planning_envs[i]._step(actions[i])
+                if self.planning_envs[i]._row <  self.planning_envs[i]._size:
+                    # get them to step to the next state
+                    _ = self.planning_envs[i]._step(actions[i])
 
                 # get the observation
                 next_observations.append(self.planning_envs[i]._get_observation())
@@ -87,6 +101,35 @@ class CountUncertainty:
         next_observations = np.stack(next_observations, axis=0)
 
         return next_observations
+
+    def get_next_true_observation_indexes(self, indexes, actions):
+        """"
+            Expects a indexes numpy array of shape (num_envs, 2) and actions a list of length num_envs
+        """
+        assert len(np.shape(indexes)) == 2
+        assert len(actions) == np.shape(indexes)[0] == self.num_envs
+
+        # Identify the rows and columns for each state
+        next_observations_indexes = []
+        for i in range(self.num_envs):
+            # If this is the null state, can just retain the null state
+            if indexes[i][0] >= self.planning_envs[i]._size:
+                next_observations_indexes.append(indexes[i])
+            else:
+                # set the envs to the right state
+                self.planning_envs[i]._row = indexes[i][0]
+                self.planning_envs[i]._column = indexes[i][1]
+
+                # get them to step to the next state
+                _ = self.planning_envs[i]._step(actions[i])
+
+                # get the indexes
+                next_observations_indexes.append([self.planning_envs[i]._row, self.planning_envs[i]._column])
+
+        # stack them in dim 0
+        next_observations_indexes = np.stack(next_observations_indexes, axis=0)
+
+        return next_observations_indexes
 
     def get_reward_uncertainty(self, state, action):
         """
@@ -110,7 +153,21 @@ class CountUncertainty:
                 if index_row < 0 or index_column < 0:
                     reward_uncertainties.append(0)
                 else:
-                    env_state_action_visit_counter = self.sa_counts[index_row, index_column, action[i]].item()
+                    env_state_action_visit_counter = self.sa_counts[index_row, index_column, action[i]]
+                    reward_uncertainties.append(self.scale / (env_state_action_visit_counter + self.eps))
+            return reward_uncertainties
+        # If state was given as indexes:
+        elif np.shape(state) == (self.num_envs, 2):
+            num_envs = np.shape(state)[0]
+            reward_uncertainties = []
+            assert len(action) == num_envs  # verify that the number of actions matches the number of states
+            for i in range(num_envs):
+                [index_row, index_column] = state[i]
+                # If this state is outside of bounds, return 0 uncertainty
+                if index_row >= self.planning_envs[0]._size:
+                    reward_uncertainties.append(0)
+                else:
+                    env_state_action_visit_counter = self.sa_counts[index_row, index_column, action[i]]
                     reward_uncertainties.append(self.scale / (env_state_action_visit_counter + self.eps))
             return reward_uncertainties
         elif len(np.shape(state)) == 2:
@@ -118,7 +175,7 @@ class CountUncertainty:
             if index_row < 0 or index_column < 0:
                 return 0
             else:
-                state_action_visit_counter = self.sa_counts[index_row, index_column, action].item()
+                state_action_visit_counter = self.sa_counts[index_row, index_column, action]
                 reward_uncertainty = self.scale / (state_action_visit_counter + self.eps)
                 return reward_uncertainty
         else:
@@ -140,6 +197,23 @@ class CountUncertainty:
             # get individual rows from each state:
             current_rows = [self.from_one_hot_state_to_indexes(state[i, :, :])[0] for i in range(num_envs)]
             per_env_horizons = [h - current if current >=0 else -1 for current in current_rows]
+            # compute the discount factors for each value-uncertainty
+            discount_factors = [(1 - self.gamma ** (2 * horizon)) / (1 - self.gamma ** 2)
+                                for horizon in per_env_horizons]
+            # compute the uncertainties for each action
+            first_actions = [0] * num_envs
+            second_actions = [1] * num_envs
+            reward_uncertainties_first_action = self.get_reward_uncertainty(state, first_actions)
+            reward_uncertainties_second_action = self.get_reward_uncertainty(state, second_actions)
+            return [abs(discount_factor * (first_unc + second_unc) / 2) for first_unc, second_unc, discount_factor in
+                    zip(reward_uncertainties_first_action, reward_uncertainties_second_action, discount_factors)]
+        elif np.shape(state) == (self.num_envs, 2):
+            num_envs = np.shape(state)[0]
+            # find horizon:
+            h = self.observation_space_shape[0]
+            # get individual rows from each state:
+            current_rows = [state[i][0] for i in range(num_envs)]
+            per_env_horizons = [h - current for current in current_rows]
             # compute the discount factors for each value-uncertainty
             discount_factors = [(1 - self.gamma ** (2 * horizon)) / (1 - self.gamma ** 2)
                                 for horizon in per_env_horizons]

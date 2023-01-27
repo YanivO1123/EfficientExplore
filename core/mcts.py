@@ -192,7 +192,7 @@ class MCTS(object):
                 # MuExplore: Visitation counter
                 true_observations = np.asarray(true_observations)
                 # Compute the next true observation and keep track of it
-                true_observations_nodes = visitation_counter.get_next_true_observation(true_observations, last_actions)
+                true_observations_nodes = visitation_counter.get_next_true_observation_indexes(true_observations, last_actions)
                 # Compute the uncertainties based on the visitation counter
                 value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations, last_actions)
                 value_variance_pool = visitation_counter.get_surface_value_uncertainty(true_observations)
