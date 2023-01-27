@@ -27,12 +27,6 @@ class DeepSeaWrapper(Game):
     def step(self, action):
         observation, reward, done, info = self.env.step(action)
         observation = observation.astype(np.uint8)
-        # unsqueeze
-        # observation = np.expand_dims(observation, axis=-1)
-        # observation = observation.reshape(1, np.shape(observation)[0], np.shape(observation)[1]).astype(np.uint8)
-
-        # if self.cvt_string:
-        #     observation = arr_to_str(observation)
 
         return observation, reward, done, info
 

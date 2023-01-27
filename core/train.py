@@ -454,7 +454,8 @@ def train(config, summary_writer, model_path=None):
           f"Exploration params: \n"
           f"Use MuExplore in MCTS: {config.mu_explore} \n"
           f"Beta value = {config.beta} \n"
-          f"Disable policy usage in exploration: {config.disable_policy_in_exploration} \n\n"
+          f"Disable policy usage in exploration: {config.disable_policy_in_exploration} \n"
+          f"Using visitation counter: {config.use_visitation_counter} \n"
           f"Starting workers", flush=True)
 
     storage = SharedStorage.remote(model, target_model)

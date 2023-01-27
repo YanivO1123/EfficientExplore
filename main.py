@@ -66,6 +66,9 @@ if __name__ == '__main__':
                              "If false, can be too policy-biased and not provide effective exploration.")
     parser.add_argument('--exploration_fraction', type=float, default=0.25,
                         help='noise magnitude to add to nodes in MCTS. Defaults to 0.25 used by EffZero')
+    parser.add_argument('--visit_counter', action='store_true', default=False,
+                        help="If the env. is deep sea, use the visit counter for uncertainty estimation. "
+                             "Otherwise, does nothing.")
 
     # Process arguments
     args = parser.parse_args()

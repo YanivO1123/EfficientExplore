@@ -13,6 +13,8 @@ from core.mcts import MCTS
 from core.game import GameHistory
 from core.utils import select_action, prepare_observation_lst
 
+from core.visitation_counter import CountUncertainty
+
 
 @ray.remote(num_gpus=0.125)
 class DataWorker(object):
@@ -37,6 +39,8 @@ class DataWorker(object):
         self.device = self.config.device
         self.gap_step = self.config.num_unroll_steps + self.config.td_steps
         self.last_model_index = -1
+
+        self.visitation_counter = None
 
     def put(self, data):
         # put a game history into the pool
@@ -114,6 +118,11 @@ class DataWorker(object):
         start_training = False
         envs = [self.config.new_game(self.config.seed + (self.rank + 1) * i) for i in range(env_nums)]
 
+        # MuExplore: start the visitation counter if it's wanted
+        if self.config.use_visitation_counter and 'deep_sea' in self.config.env_name:
+            mapping_seeds = [(self.config.seed + (self.rank + 1) * i) for i in range(env_nums)]
+            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=env_nums, mapping_seeds=mapping_seeds)
+
         def _get_max_entropy(action_space):
             p = 1.0 / action_space
             ep = - action_space * p * np.log2(p)
@@ -126,7 +135,6 @@ class DataWorker(object):
 
         # Organized as: max, min, sum
         value_max, value_unc_max, value_min, value_unc_min, value_sum, value_unc_sum = -math.inf, -math.inf, math.inf, math.inf, 0, 0
-
         with torch.no_grad():
             while True:
                 trained_steps = ray.get(self.storage.get_counter.remote())
@@ -269,12 +277,16 @@ class DataWorker(object):
 
                     # stack obs for model inference
                     stack_obs = [game_history.step_obs() for game_history in game_histories]
+                    if self.config.use_visitation_counter and self.visitation_counter is not None:
+                        # Take the last of observation of stacked obs, from shape (num_envs, stack_obs, h, w)
+                        # to shape (num_envs, h, w)
+                        initial_observations_for_counter = np.array(stack_obs, dtype=np.uint8)[:,-1,:,:]
                     if self.config.image_based:
                         stack_obs = prepare_observation_lst(stack_obs)
                         stack_obs = torch.from_numpy(stack_obs).to(self.device).float() / 255.0
                     elif "deep_sea" in self.config.env_name:
                         stack_obs = prepare_observation_lst(stack_obs)
-                        stack_obs = torch.from_numpy(stack_obs).to(self.device).float()
+                        stack_obs = torch.from_numpy(stack_obs).to(self.device)
                     else:
                         stack_obs = torch.from_numpy(np.array(stack_obs)).to(self.device)
 
@@ -307,8 +319,13 @@ class DataWorker(object):
                         roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool,
                                       policy_logits_pool)
 
-                    # do MCTS for a policy
-                    MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots)
+                    # MuExplore: if we wish to use a visitation counter:
+                    if self.config.use_visitation_counter and self.visitation_counter is not None:
+                        MCTS(self.config).search_w_visitation_counter(roots, model, hidden_state_roots, reward_hidden_roots,
+                                                 self.visitation_counter, initial_observations_for_counter)
+                    else:   # Otherwise
+                        # do MCTS for a policy
+                        MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots)
 
                     roots_distributions = roots.get_distributions()
                     roots_values = roots.get_values()
@@ -326,7 +343,18 @@ class DataWorker(object):
                             distributions = np.ones(self.config.action_space_size)
 
                         action, visit_entropy = select_action(distributions, temperature=temperature, deterministic=deterministic)
+                        # MuExplore: Add state-action to visitation counter
+                        if self.config.use_visitation_counter:
+                            # Take the last observation that was stored, and the current action
+                            self.visitation_counter.observe(game_histories[i].obs_history[-1], action)
+
                         obs, ori_reward, done, info = env.step(action)
+
+                        if ori_reward > 0 and 'deep_sea' in self.config.env_name:
+                            print(f"Encountered reward of {ori_reward} \n"
+                                  f"At state {obs}"
+                                  , flush=True)
+
                         # clip the reward
                         if self.config.clip_reward:
                             clip_reward = np.sign(ori_reward)
@@ -380,13 +408,16 @@ class DataWorker(object):
                         value_unc_max = max(value_unc_max, np.max(root_values_uncertainties[1:]))
                         value_unc_min = min(value_unc_min, np.min(root_values_uncertainties[1:]))
                         value_unc_sum += sum(root_values_uncertainties[1:])
-                        if (total_transitions - self.config.p_mcts_num) % (self.config.test_interval) == 0:
+                        if (total_transitions - self.config.p_mcts_num) % (200) == 0:   # self.config.test_interval
                             print(f"Printing root-values and root-values-uncertainties statistics at transition number "
                                   f"{total_transitions}: \n"
                                   f"values: max = {value_max}, min: {value_min}, mean: "
                                   f"{value_sum / total_transitions} \n"
                                   f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
                                   f"{value_unc_sum / (total_transitions * 3 / 4) } \n"
+                                  , flush=True)
+                            print(f"Printing the state visitation counter: \n"
+                                  f"{self.visitation_counter.s_counts}"
                                   , flush=True)
 
                 for i in range(env_nums):

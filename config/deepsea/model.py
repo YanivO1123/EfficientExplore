@@ -373,7 +373,7 @@ class PredictionNetwork(nn.Module):
         return policy, value
 
 
-class FullyConnectedEfficientZeroNet(BaseNet):
+class EfficientZeroNet(BaseNet):
     def __init__(
         self,
         observation_shape,
@@ -451,7 +451,7 @@ class FullyConnectedEfficientZeroNet(BaseNet):
         state_norm: bool
             True -> normalization for hidden states
         """
-        super(FullyConnectedEfficientZeroNet, self).__init__(inverse_value_transform, inverse_reward_transform, lstm_hidden_size)
+        super(EfficientZeroNet, self).__init__(inverse_value_transform, inverse_reward_transform, lstm_hidden_size)
         self.proj_hid = proj_hid
         self.proj_out = proj_out
         self.pred_hid = pred_hid
@@ -611,7 +611,7 @@ class FullyConnectedEfficientZeroNet(BaseNet):
             return proj.detach()
 
 
-class EfficientExploreNet(FullyConnectedEfficientZeroNet):
+class EfficientExploreNet(EfficientZeroNet):
     def __init__(self,
                  observation_shape,
                  action_space_size,

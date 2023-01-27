@@ -75,6 +75,7 @@ class BaseConfig(object):
                  reward_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
                  mu_explore: bool = False,
                  use_uncertainty_architecture: bool = False,
+                 use_visitation_counter: bool = False,
                  ensemble_size: int = 5,
                  use_network_prior: bool = False,
                  prior_scale: float = 10.0,
@@ -205,6 +206,9 @@ class BaseConfig(object):
         use_uncertainty_architecture: bool
             a bool whether to init a regular EffZero network, or a network with ensembles over value prefix and
             value predictions
+        use_visitation_counter: bool
+            Only implemented for deep_sea. The visitation counter counts state-action visitations and uses them as a
+            measure of epistemic uncertainty, as so: 1 / (epsilon + state_action_visit_count)
         ensemble_size: int
             The number of ensemble-heads, both for value prediction as well as value prefix prediction.
         use_network_prior: bool
@@ -327,6 +331,9 @@ class BaseConfig(object):
         self.beta = beta
         self.disable_policy_in_exploration = disable_policy_in_exploration
 
+        # visitation counter
+        self.use_visitation_counter = use_visitation_counter
+
         # control training / interactions ratio
         self.training_ratio = training_ratio
 
@@ -444,15 +451,17 @@ class BaseConfig(object):
         if args.cluster:
             # Batch size
             self.batch_size = 256
+            # MuExplore
+            # Ensemble network arch.
+            self.ensemble_size = 5
+
+        if args.cluster and args.case == 'atari':
             # Base network arch.
             self.lstm_hidden_size = 512
             self.proj_hid = 1024
             self.proj_out = 1024
             self.pred_hid = 512
             self.pred_out = 1024
-            # MuExplore
-            # Ensemble network arch.
-            self.ensemble_size = 5
 
         # Setup MuExplore params from command line
         if args.beta is not None and args.beta >= 0:
@@ -464,6 +473,8 @@ class BaseConfig(object):
         self.use_uncertainty_architecture = args.uncertainty_architecture
         self.disable_policy_in_exploration = args.disable_policy_in_exploration
         self.root_exploration_fraction = args.exploration_fraction
+        if args.case == 'deep_sea':
+            self.use_visitation_counter = args.visit_counter
 
         if not self.do_consistency:
             self.consistency_coeff = 0

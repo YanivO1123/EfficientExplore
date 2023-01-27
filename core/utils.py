@@ -6,8 +6,8 @@ import random
 import shutil
 import logging
 import numpy as np
-
-import bsuite
+from bsuite.environments.deep_sea import DeepSea
+from bsuite import sweep
 from bsuite.utils import gym_wrapper as bsuite_gym_wrapper
 
 from scipy.stats import entropy
@@ -241,8 +241,10 @@ def make_atari(env_id, skip=4, max_episode_steps=None):
         env = TimeLimit(env, max_episode_steps=max_episode_steps)
     return env
 
-def make_deepsea(env_id):
-    env = bsuite.load_from_id(env_id)
+def make_deepsea(env_id, mapping_seed):
+    # env = bsuite.load_from_id(env_id)
+    size = sweep.SETTINGS[env_id]['size']
+    env = DeepSea(size=size, mapping_seed=mapping_seed)
     env = bsuite_gym_wrapper.GymFromDMEnv(env)
     return env
 
@@ -296,6 +298,12 @@ def select_action(visit_counts, temperature=1, deterministic=True):
         True -> select the argmax
         False -> sample from the distribution
     """
+    # If temperature is about zero, return the argmax
+    if temperature < 0.0001:
+        action_probs = [visit_count_i ** (1 / 0.0001) for visit_count_i in visit_counts]
+        count_entropy = entropy(action_probs, base=2)
+        action_pos = np.argmax([v for v in visit_counts])
+        return action_pos, count_entropy
     action_probs = [visit_count_i ** (1 / temperature) for visit_count_i in visit_counts]
     total_count = sum(action_probs)
     action_probs = [x / total_count for x in action_probs]
