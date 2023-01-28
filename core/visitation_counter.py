@@ -62,14 +62,18 @@ class CountUncertainty:
         """ Add counts for observed 'state' (observations from deep_sea, which are also the true state).
             'state' is a numpy array of shape (height, width)
         """
-        assert len(np.shape(state)) == 2
-        # The shape of the expected input is:
-        # (height, width)
-        row, column = self.from_one_hot_state_to_indexes(state)
-        if row < 0 or column < 0:
-            raise ValueError(f"Tried to observe the 'null' state. State was: {state}")
-        self.s_counts[row, column] += 1
-        self.sa_counts[row, column, action] += 1
+        if len(np.shape(state)) == 2:
+            # The shape of the expected input is:
+            # (height, width)
+            row, column = self.from_one_hot_state_to_indexes(state)
+            if row < 0 or column < 0:
+                raise ValueError(f"Tried to observe the 'null' state. State was: {state}")
+            self.s_counts[row, column] += 1
+            self.sa_counts[row, column, action] += 1
+        # Alternatively, if we got a state in indexes form
+        elif len(state) == 2 and not len(np.shape(state)) == 2:
+            self.s_counts[state[0], state[1]] += 1
+            self.sa_counts[state[0], state[1], action] += 1
 
     def get_next_true_observation(self, states, actions):
         """"
@@ -239,39 +243,47 @@ class CountUncertainty:
             raise ValueError(f"get_surface_value_uncertainty is not implemented for states of shape "
                              f"!= (num_envs, height, width) or (height, width), and shape was: {state.shape}")
 
-    def get_propagated_value_uncertainty(self, state, action, propagation_horizon=5):
+    def get_propagated_value_uncertainty(self, state, propagation_horizon=3, sampling_times=1):
         """
-            Takes a state, action, environment and horizon.
+            Takes an index-type state of shape (num_envs, 2), action, environment and horizon.
             Uses the environment to plan and compute the value uncertainty based on a trajectory of reward uncertainties
             returns the environment as it recieved it
+            sampling times:
+                If > 0, do stochastic MC up to horizon propagation_horizon of number sampling_times
+                If <= 0, do a complete tree of depth propagation_horizon
         """
-        print("Getting propagated visitation count uncertainty for deep sea when the actions are randomized is "
-              "non-trivial and not implemented")
-        raise NotImplementedError
-        # propagated_uncertainty = 0
-        # original_row, original_column = np.where(state == 1)
-        # print(f"original_row, original_column = {original_row}, {original_column}")
-        # self.planning_env._row = original_row
-        # self.planning_env._column = original_column
-        # for i in range(3):
-        #     _, _, _, _ = self.planning_env.step(0)
-        # obs = self.planning_env._get_observation()
-        # print(f"Current state is: np.where(obs == 1) = {np.where(obs == 1)}")
-        # self.planning_env._row = original_row
-        # self.planning_env._column = original_column
-        # obs, _, _, _ = self.planning_env.step(0)
-        # obs = self.planning_env._get_observation()
-        # print(f"And after resetting the env and taking one more step left: np.where(obs == 1) = {np.where(obs == 1)}")
-        # exit()
-        #
-        # # Add local reward uncertainty
-        # propagated_uncertainty += self.get_reward_uncertainty(state, action)
-        #
-        # for i in range(propagation_horizon):
-        #     state = self.planning_env.step(action)
-        #     propagated_uncertainty += self.get_reward_uncertainty(state, action)
-        #
-        # env._row = original_row
-        # env._column = original_column
-        # return propagated_uncertainty
+        assert np.shape(state) == (self.num_envs, 2)
+        if sampling_times > 0:
+            samples = []
+            for i in range(sampling_times):
+                propagated_uncertainty = self.sampled_recursive_propagated_uncertainty(np.asarray(state), propagation_horizon)
+                samples.append(propagated_uncertainty)
+            propagated_uncertainty = np.stack(samples, axis=0).max(axis=0)
+        else:
+            propagated_uncertainty = self.recursive_propagated_uncertainty(np.asarray(state), propagation_horizon)
+        return propagated_uncertainty.tolist()
 
+    def recursive_propagated_uncertainty(self, state, propagation_horizon):
+        """
+            Operates on arrays
+            Takes state of shape (num_envs, 2) and averages the local reward uncertainties and surface value uncertainty
+        """
+        if propagation_horizon == 0:
+            return np.asarray(self.get_surface_value_uncertainty(state))
+        else:
+            local_reward_uncertainty = (np.asarray(self.get_reward_uncertainty(state, [0 for _ in range(self.num_envs)])) + np.asarray(self.get_reward_uncertainty(state, [1 for _ in range(self.num_envs)]))) / 2
+            first_next_state, second_next_state = self.get_next_true_observation_indexes(state, actions=[0 for _ in range(self.num_envs)]), self.get_next_true_observation_indexes(state, actions=[1 for _ in range(self.num_envs)])
+            return np.asarray(local_reward_uncertainty + (self.gamma ** 2) * np.max(self.recursive_propagated_uncertainty(first_next_state, propagation_horizon - 1), self.recursive_propagated_uncertainty(second_next_state, propagation_horizon - 1)))
+
+    def sampled_recursive_propagated_uncertainty(self, state, propagation_horizon):
+        """
+            Operates on arrays
+            Takes state of shape (num_envs, 2) and averages the local reward uncertainties and surface value uncertainty
+        """
+        if propagation_horizon == 0:
+            return np.asarray(self.get_surface_value_uncertainty(state))
+        else:
+            actions = [np.random.randint(low=0,high=2) for _ in range(self.num_envs)]
+            local_reward_uncertainty = np.asarray(self.get_reward_uncertainty(state, actions))
+            sampled_next_state = self.get_next_true_observation_indexes(state, actions=actions)
+            return np.asarray(local_reward_uncertainty + (self.gamma ** 2) * (self.sampled_recursive_propagated_uncertainty(sampled_next_state, propagation_horizon - 1)))

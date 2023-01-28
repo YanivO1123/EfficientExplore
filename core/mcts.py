@@ -145,7 +145,9 @@ class MCTS(object):
             # the data storage of hidden states: storing the states of all the tree nodes
             hidden_state_pool = [hidden_state_roots]
 
+            # MuExplore: visitation counter: keep track of the true state for planning with the visit counter
             true_observation_pool = [initial_observation_roots]
+            value_propagation_horizon = visitation_counter.observation_space_shape[0]
 
             # 1 x batch x 64
             # the data storage of value prefix hidden states in LSTM
@@ -195,7 +197,8 @@ class MCTS(object):
                 true_observations_nodes = visitation_counter.get_next_true_observation_indexes(true_observations, last_actions)
                 # Compute the uncertainties based on the visitation counter
                 value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations, last_actions)
-                value_variance_pool = visitation_counter.get_surface_value_uncertainty(true_observations)
+                # Compute the PROPAGATED value uncertainty, by doing Monte-Carlo sims with the real model for sampling_times sims, up to horizon propagation_horizon
+                value_variance_pool = visitation_counter.get_propagated_value_uncertainty(true_observations, propagation_horizon=value_propagation_horizon, sampling_times=5)
 
                 last_actions = torch.from_numpy(np.asarray(last_actions)).to(device).unsqueeze(1).long()
 

@@ -14,7 +14,7 @@ from bsuite.utils import gym_wrapper
 class DeepSeaConfig(BaseConfig):
     def __init__(self):
         super(DeepSeaConfig, self).__init__(
-            training_steps=20000, #100000,
+            training_steps=50000, #100000,
             last_steps=1000,#20000
             test_interval=500, #10000,
             log_interval=500,
