@@ -69,6 +69,11 @@ if __name__ == '__main__':
     parser.add_argument('--visit_counter', action='store_true', default=False,
                         help="If the env. is deep sea, use the visit counter for uncertainty estimation. "
                              "Otherwise, does nothing.")
+    parser.add_argument('--p_w_vis_counter', action='store_true', default=False,
+                        help="If the env. is deep sea, use the visit counter in MCTS planning with muexplore. "
+                             "Otherwise, does nothing.")
+
+
 
     # Process arguments
     args = parser.parse_args()

@@ -196,9 +196,10 @@ class MCTS(object):
                 # Compute the next true observation and keep track of it
                 true_observations_nodes = visitation_counter.get_next_true_observation_indexes(true_observations, last_actions)
                 # Compute the uncertainties based on the visitation counter
-                value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations, last_actions)
-                # Compute the PROPAGATED value uncertainty, by doing Monte-Carlo sims with the real model for sampling_times sims, up to horizon propagation_horizon
-                value_variance_pool = visitation_counter.get_propagated_value_uncertainty(true_observations, propagation_horizon=value_propagation_horizon, sampling_times=5)
+                if self.config.plan_with_visitation_counter:
+                    value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations, last_actions, use_state_visits=True)
+                    # Compute the PROPAGATED value uncertainty, by doing Monte-Carlo sims with the real model for sampling_times sims, up to horizon propagation_horizon
+                    value_variance_pool = visitation_counter.get_propagated_value_uncertainty(true_observations, propagation_horizon=value_propagation_horizon, sampling_times=5, use_state_visits=True)
 
                 last_actions = torch.from_numpy(np.asarray(last_actions)).to(device).unsqueeze(1).long()
 
@@ -215,8 +216,9 @@ class MCTS(object):
                 policy_logits_pool = network_output.policy_logits.tolist()
                 reward_hidden_nodes = network_output.reward_hidden
                 # MuExplore: If I want to evaluate ensembles while state counter is running, can uncomment these lines
-                # value_prefix_variance_pool = network_output.value_prefix_variance.reshape(-1).tolist() if network_output.value_prefix_variance is not None else None
-                # value_variance_pool = network_output.value_variance.reshape(-1).tolist() if network_output.value_variance is not None else None
+                if not self.config.plan_with_visitation_counter:
+                    value_prefix_variance_pool = network_output.value_prefix_variance.reshape(-1).tolist() if network_output.value_prefix_variance is not None else None
+                    value_variance_pool = network_output.value_variance.reshape(-1).tolist() if network_output.value_variance is not None else None
 
                 # MuExplore: state counter, keep track of the true states of the environment
                 true_observation_pool.append(true_observations_nodes)

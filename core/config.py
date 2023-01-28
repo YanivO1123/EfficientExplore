@@ -76,6 +76,7 @@ class BaseConfig(object):
                  mu_explore: bool = False,
                  use_uncertainty_architecture: bool = False,
                  use_visitation_counter: bool = False,
+                 plan_with_visitation_counter: bool = False,
                  ensemble_size: int = 5,
                  use_network_prior: bool = False,
                  prior_scale: float = 10.0,
@@ -209,6 +210,8 @@ class BaseConfig(object):
         use_visitation_counter: bool
             Only implemented for deep_sea. The visitation counter counts state-action visitations and uses them as a
             measure of epistemic uncertainty, as so: 1 / (epsilon + state_action_visit_count)
+        plan_with_visitation_counter: bool
+            Whether to use the visitation counter in planning with MCTS and muexplore, or only for debugging purposes
         ensemble_size: int
             The number of ensemble-heads, both for value prediction as well as value prefix prediction.
         use_network_prior: bool
@@ -333,6 +336,7 @@ class BaseConfig(object):
 
         # visitation counter
         self.use_visitation_counter = use_visitation_counter
+        self.plan_with_visitation_counter = plan_with_visitation_counter
 
         # control training / interactions ratio
         self.training_ratio = training_ratio
@@ -475,6 +479,8 @@ class BaseConfig(object):
         self.root_exploration_fraction = args.exploration_fraction
         if args.case == 'deep_sea':
             self.use_visitation_counter = args.visit_counter
+            # only use visit_counter in planning when it's enabled
+            self.plan_with_visitation_counter = args.p_w_vis_counter and args.visit_counter
 
         if not self.do_consistency:
             self.consistency_coeff = 0
