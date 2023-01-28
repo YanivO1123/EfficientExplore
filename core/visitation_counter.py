@@ -9,7 +9,7 @@ class CountUncertainty:
         Uncertainty will be scaled by 'scale'. Define boundaries either by 'state_bounds'
         or automatically by passing the environment 'env'. The counts will use
         'resolution'^m different bins for m-dimensional state vecotrs"""
-    def __init__(self, name, num_envs, mapping_seeds, scale=1, epsilon=1E-7, gamma=0.95):
+    def __init__(self, name, num_envs, mapping_seed, scale=1, epsilon=1E-7, gamma=0.95, fake=False):
         """
             name: the name of the env (deep_sea/N)
             num_envs: num of parallel envs for planning with MCTS
@@ -17,6 +17,7 @@ class CountUncertainty:
             epsilon: the scale of max. uncertainty (zero visitaitons). unc = 1 / (epsilon + visit_count)
             size: size of environment. Observations are square, so they are of shape size x size
             gamma: the discount used to estimate the value uncertainty from reward uncertainties
+            fake: for debugging - if true, the rewarding transition is always associated with max uncertainty.
         """
         self.name = name
         size = sweep.SETTINGS[name]['size']
@@ -28,8 +29,17 @@ class CountUncertainty:
         self.eps = epsilon
         self.gamma = gamma
         self.num_envs = num_envs
-        self.planning_envs = [DeepSea(size=size, mapping_seed=mapping_seeds[i]) for i in range(num_envs)]
+        # we init all envs with the same seed, because we also init all the real envs with the same seed
+        self.planning_envs = [DeepSea(size=size, mapping_seed=mapping_seed) for _ in range(num_envs)]
         self.observation_counter = 0
+        self.rewarding_transition = self.identify_rewarding_transition()
+        self.fake_reward_uncertainty = fake
+
+    def identify_rewarding_transition(self):
+        # The best transition is at action right at state -1,-1
+        action_right = self.planning_envs[0]._action_mapping[-1, -1]
+        row_index, column_index = self.observation_space_shape[0] - 1, self.observation_space_shape[1] - 1
+        return (row_index, column_index, action_right)
 
     @staticmethod
     def from_one_hot_state_to_indexes(state):
@@ -136,6 +146,18 @@ class CountUncertainty:
 
         return next_observations_indexes
 
+    def state_action_uncertainty(self, index_row, index_column, action):
+        """
+            Returns the uncertainty with state-action pair.
+            If fake_reward_uncertainty is true, returns max uncertainty with rewarding state always, regardless of count
+        """
+        if self.fake_reward_uncertainty and (index_row, index_column, action) == self.rewarding_transition:
+            return self.scale / self.eps
+        elif index_row >= self.planning_envs[0]._size:
+            return 0
+        else:
+            return self.scale / (self.sa_counts[index_row, index_column, action] + self.eps)
+
     def get_reward_uncertainty(self, state, action, use_state_visits=False):
         """
             If state is an array of shape (num_envs, height, width) = (4, 10, 10) and action a list of
@@ -151,16 +173,14 @@ class CountUncertainty:
             if use_state_visits:
                 raise NotImplementedError
             else:
-                if state[0] >= self.planning_envs[0]._size:
-                    return 0
-                else:
-                    env_state_action_visit_counter = self.sa_counts[state[0], state[1], action]
-                    return self.scale / (env_state_action_visit_counter + self.eps)
+                return self.state_action_uncertainty(state[0], state[1], action)
         # If state is a tensor of shape (num_envs, stacked_obs, height, width)
         if len(np.shape(state)) == 3:
             num_envs = np.shape(state)[0]
             reward_uncertainties = []
             assert len(action) == num_envs    # verify that the number of actions matches the number of states
+            if use_state_visits:
+                raise NotImplementedError
             for i in range(num_envs):
                 env_state = state[i, :, :]
                 index_row, index_column = self.from_one_hot_state_to_indexes(env_state)
@@ -168,8 +188,7 @@ class CountUncertainty:
                 if index_row < 0 or index_column < 0:
                     reward_uncertainties.append(0)
                 else:
-                    env_state_action_visit_counter = self.sa_counts[index_row, index_column, action[i]]
-                    reward_uncertainties.append(self.scale / (env_state_action_visit_counter + self.eps))
+                    reward_uncertainties.append(self.state_action_uncertainty(index_row, index_column, action[i]))
             return reward_uncertainties
         # If state was given as indexes:
         elif np.shape(state) == (self.num_envs, 2):
@@ -188,28 +207,19 @@ class CountUncertainty:
                         reward_uncertainties.append(0)
                     # If the action just took us outside of the bound of env, take the unc. from state-action
                     elif index_row_next_state == self.planning_envs[0]._size:
-                        reward_uncertainties.append(self.scale / (self.sa_counts[index_row, index_column, action[i]] + self.eps))
+                        reward_uncertainties.append(self.state_action_uncertainty(index_row, index_column, action[i]))
                     # otherwise, just compute the uncertainty according to the state counter
                     else:
                         reward_uncertainties.append(self.scale / (self.s_counts[index_row_next_state, index_col_next_state] + self.eps))
                 return reward_uncertainties
-            for i in range(num_envs):
-                [index_row, index_column] = state[i]
-                # If this state is outside of bounds, return 0 uncertainty
-                if index_row >= self.planning_envs[0]._size:
-                    reward_uncertainties.append(0)
-                else:
-                    env_state_action_visit_counter = self.sa_counts[index_row, index_column, action[i]]
-                    reward_uncertainties.append(self.scale / (env_state_action_visit_counter + self.eps))
-            return reward_uncertainties
+            else:
+                for i in range(num_envs):
+                    reward_uncertainties.append(self.state_action_uncertainty(state[i][0], state[i][1], action[i]))
+                return reward_uncertainties
+        # Otherwise, if it's a singular state of shape (size, size)
         elif len(np.shape(state)) == 2:
             index_row, index_column = self.from_one_hot_state_to_indexes(state)
-            if index_row < 0 or index_column < 0:
-                return 0
-            else:
-                state_action_visit_counter = self.sa_counts[index_row, index_column, action]
-                reward_uncertainty = self.scale / (state_action_visit_counter + self.eps)
-                return reward_uncertainty
+            return self.state_action_uncertainty(index_row, index_column, action)
         else:
             raise ValueError(f"get_reward_uncertainty is not implemented for states of shape "
                              f"!= (num_envs, stacked_obs, height, width) or (height, width), and shape was: {state.shape}")

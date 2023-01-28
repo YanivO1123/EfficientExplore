@@ -120,8 +120,7 @@ class DataWorker(object):
 
         # MuExplore: start the visitation counter if it's wanted
         if self.config.use_visitation_counter and 'deep_sea' in self.config.env_name:
-            mapping_seeds = [(self.config.seed + (self.rank + 1) * i) for i in range(env_nums)]
-            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=env_nums, mapping_seeds=mapping_seeds)
+            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=env_nums, mapping_seed=self.config.seed, fake=True)
 
         def _get_max_entropy(action_space):
             p = 1.0 / action_space

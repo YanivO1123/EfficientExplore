@@ -101,16 +101,14 @@ class DeepSeaConfig(BaseConfig):
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         if self.change_temperature:
-            if self.use_visitation_counter:
+            if self.use_visitation_counter or self.mu_explore:
                 return 0.0
-            if trained_steps < 0.2 * (self.training_steps):
-                return 1.0
             if trained_steps < 0.5 * (self.training_steps):
-                return 0.5
+                return 1.0
             elif trained_steps < 0.75 * (self.training_steps):
-                return 0.25
+                return 0.5
             else:
-                return 0.0
+                return 0.25
         else:
             return 1.0
 
@@ -197,9 +195,13 @@ class DeepSeaConfig(BaseConfig):
         # if self.episode_life and not test:
         #     env = EpisodicLifeEnv(env)
         # env = WarpFrame(env, width=self.obs_shape[1], height=self.obs_shape[2], grayscale=self.gray_scale)
-        env = make_deepsea(self.env_name, mapping_seed=seed)
-        if seed is not None:
-            env.seed(seed)
+
+        # It's important to seed the mapping_seed with the same seed for all envs - otherwise, the agent tries to learn
+        # different envs at the same time..
+        env = make_deepsea(self.env_name, mapping_seed=self.seed, env_seed=seed)
+
+        # if seed is not None:
+        #     env.seed(seed)
 
         if save_video:
             print("Does not have save_video option in deep_sea, proceeding without")
