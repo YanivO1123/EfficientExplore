@@ -75,7 +75,7 @@ class BatchWorker_CPU(object):
             # off-policy correction: shorter horizon of td steps
             delta_td = (total_transitions - idx) // config.auto_td_steps
             td_steps = config.td_steps - delta_td
-            td_steps = np.clip(td_steps, 1, 5).astype(np.int)
+            td_steps = np.clip(td_steps, 1, config.td_steps).astype(np.int)
 
             # prepare the corresponding observations for bootstrapped values o_{t+k}
             game_obs = game.obs(state_index + td_steps, config.num_unroll_steps)
@@ -351,9 +351,9 @@ class BatchWorker_GPU(object):
                 policy_logits_pool = policy_logits_pool.tolist()
                 roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations)
                 noises = [np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(np.float32).tolist() for _ in range(batch_size)]
+                # TODO: Do I really want to create NOISY roots as targets?
                 roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool, policy_logits_pool)
                 MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots)
-
                 roots_values = roots.get_values()
                 value_lst = np.array(roots_values)
             else:

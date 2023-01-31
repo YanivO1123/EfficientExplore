@@ -108,20 +108,20 @@ class DataWorker(object):
         return priorities
 
     def run(self):
-        print(f"Data worker started")
+        print(f"Data worker started", flush=True)
         # number of parallel mcts
         env_nums = self.config.p_mcts_num
         model = self.config.get_uniform_network()
         model.to(self.device)
         model.eval()
-
+        print(f"Model started", flush=True)
         start_training = False
         envs = [self.config.new_game(self.config.seed + (self.rank + 1) * i) for i in range(env_nums)]
-
+        print(f"Envs started", flush=True)
         # MuExplore: start the visitation counter if it's wanted
         if self.config.use_visitation_counter and 'deep_sea' in self.config.env_name:
-            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=env_nums, mapping_seed=self.config.seed, fake=True)
-
+            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=env_nums, mapping_seed=self.config.seed)
+            print(f"Initiated visitation counter", flush=True)
         def _get_max_entropy(action_space):
             p = 1.0 / action_space
             ep = - action_space * p * np.log2(p)
@@ -132,8 +132,9 @@ class DataWorker(object):
         # max transition to collect for this data worker
         max_transitions = self.config.total_transitions // self.config.num_actors
 
-        # Organized as: max, min, sum
+        # MuExplore: keep track of values and value uncertainties to debug beta
         value_max, value_unc_max, value_min, value_unc_min, value_sum, value_unc_sum = -math.inf, -math.inf, math.inf, math.inf, 0, 0
+
         with torch.no_grad():
             while True:
                 trained_steps = ray.get(self.storage.get_counter.remote())
@@ -182,6 +183,7 @@ class DataWorker(object):
 
                     # get model
                     trained_steps = ray.get(self.storage.get_counter.remote())
+
                     if trained_steps >= self.config.training_steps + self.config.last_steps:
                         # training is finished
                         time.sleep(30)
@@ -229,6 +231,7 @@ class DataWorker(object):
                                                                             self_play_rewards_max, _temperature.mean(),
                                                                             visit_entropies, 0,
                                                                             other_dist)
+
                             self_play_rewards_max = - np.inf
 
                     step_counter += 1
@@ -336,6 +339,8 @@ class DataWorker(object):
                         deterministic = False
                         if start_training:
                             distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
+                        elif 'deep_sea' in self.config.env_name:    # We don't want random actions in deep_sea
+                            distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
                         else:
                             # before starting training, use random policy
                             value, temperature, env = roots_values[i], _temperature[i], envs[i]
@@ -350,8 +355,11 @@ class DataWorker(object):
                         obs, ori_reward, done, info = env.step(action)
 
                         if ori_reward > 0 and 'deep_sea' in self.config.env_name:
-                            print(f"Encountered reward of {ori_reward} \n"
-                                  f"At state {obs}"
+                            ori_reward = ori_reward * 100
+                            print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
+                                  f"Encountered reward: {ori_reward}. Env index is :{i}. "
+                                  f"State is: {initial_observations_for_counter[i]}, and action is: {action} \n"
+                                  f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
                                   , flush=True)
 
                         # clip the reward
@@ -407,7 +415,7 @@ class DataWorker(object):
                         value_unc_max = max(value_unc_max, np.max(root_values_uncertainties[1:]))
                         value_unc_min = min(value_unc_min, np.min(root_values_uncertainties[1:]))
                         value_unc_sum += sum(root_values_uncertainties[1:])
-                        if (total_transitions - self.config.p_mcts_num) % (200) == 0:   # self.config.test_interval
+                        if (total_transitions - self.config.p_mcts_num) % (self.config.test_interval) == 0:
                             print(f"Printing root-values and root-values-uncertainties statistics at transition number "
                                   f"{total_transitions}: \n"
                                   f"values: max = {value_max}, min: {value_min}, mean: "
@@ -415,10 +423,13 @@ class DataWorker(object):
                                   f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
                                   f"{value_unc_sum / (total_transitions * 3 / 4) } \n"
                                   , flush=True)
-                            print(f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
-                                  f"Printing the state visitation counter: \n"
-                                  f"{self.visitation_counter.s_counts}"
-                                  , flush=True)
+
+                    if 'deep_sea' in self.config.env_name and (total_transitions - self.config.p_mcts_num) % (self.config.test_interval) == 0:
+                        print(f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
+                              f"Printing the state-action visitation counter at the last row: {self.visitation_counter.sa_counts[-1, :, :]} \n"
+                              f"Printing the state visitation counter: \n"
+                              f"{self.visitation_counter.s_counts}"
+                              , flush=True)
 
                 for i in range(env_nums):
                     env = envs[i]

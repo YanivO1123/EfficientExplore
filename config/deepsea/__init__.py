@@ -23,15 +23,15 @@ class DeepSeaConfig(BaseConfig):
             checkpoint_interval=100,
             target_model_interval=200,
             save_ckpt_interval=10000,
-            max_moves=10, #12000, # TODO: Check the max moves of deepsea / re-set it in game setup
-            test_max_moves=10, #12000, # TODO: Check the max moves of deepsea / re-set it in game setup
-            history_length=10, # TODO: Check the history_length of deepsea, will be the N of NxN env size
+            max_moves=10, #12000, # Max moves are re-set in set_game to env_size
+            test_max_moves=10, #12000, # test_max_moves are re-set in set_game to env_size
+            history_length=10, # history_length is re-set in set_game to env_size
             discount=0.997, # Might want lower
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
             batch_size=64, # 32 # 64 #256,  # TODO: can be larger with smaller net
-            td_steps=5,
+            td_steps=3, # 5,
             num_actors=1,
             # network initialization/ & normalization
             episode_life=False, # This uses properties of real gym
@@ -40,13 +40,13 @@ class DeepSeaConfig(BaseConfig):
             clip_reward=False,  # no need to clip reward in deepsea
             # storage efficient
             cvt_string=False,    # deepsea returns a 1 hot encoding, no need to
-            image_based=False,   # TODO: Probably should be false, check what deepsea returns
+            image_based=False,   #
             # lr scheduler
             lr_warm_up=0.01,
             lr_init=0.2,
             lr_decay_rate=0.1,
             lr_decay_steps=100000,
-            auto_td_steps_ratio=0.3,
+            auto_td_steps_ratio=0.1, # 0.3,
             # replay window
             start_transitions=256,
             total_transitions=100 * 1000,
@@ -78,12 +78,13 @@ class DeepSeaConfig(BaseConfig):
             prior_scale=10.0,
             # visitation counter
             use_visitation_counter=False,
+            plan_with_visitation_counter=False,
             # Exploration
             mu_explore=False,
-            beta=0,     # re-tune beta
-            disable_policy_in_exploration = False,
+            beta=1.0,
+            disable_policy_in_exploration=False,
             # ratio of training / interactions
-            training_ratio = 1,
+            training_ratio=1,
         )
         self.start_transitions = max(1, self.start_transitions)
 
@@ -198,7 +199,7 @@ class DeepSeaConfig(BaseConfig):
 
         # It's important to seed the mapping_seed with the same seed for all envs - otherwise, the agent tries to learn
         # different envs at the same time..
-        env = make_deepsea(self.env_name, mapping_seed=self.seed, env_seed=seed)
+        env = make_deepsea(self.env_name, seed=self.seed)
 
         # if seed is not None:
         #     env.seed(seed)

@@ -241,10 +241,10 @@ def make_atari(env_id, skip=4, max_episode_steps=None):
         env = TimeLimit(env, max_episode_steps=max_episode_steps)
     return env
 
-def make_deepsea(env_id, mapping_seed, env_seed):
+def make_deepsea(env_id, seed):
     # env = bsuite.load_from_id(env_id)
     size = sweep.SETTINGS[env_id]['size']
-    env = DeepSea(size=size, mapping_seed=mapping_seed, seed=env_seed)
+    env = DeepSea(size=size, mapping_seed=seed, seed=seed)
     env = bsuite_gym_wrapper.GymFromDMEnv(env)
     return env
 
@@ -304,7 +304,10 @@ def select_action(visit_counts, temperature=1, deterministic=True):
         total_count = sum(action_probs)
         action_probs = [x / total_count for x in action_probs]
         count_entropy = entropy(action_probs, base=2)
-        action_pos = np.argmax([v for v in visit_counts])
+        # action_pos = np.argmax([v for v in visit_counts])
+        # Choose the maximizing action randomly. Critical with visitation counter
+        best_actions = np.argwhere(visit_counts == np.amax(visit_counts)).flatten()
+        action_pos = np.random.choice(best_actions)
         return action_pos, count_entropy
     action_probs = [visit_count_i ** (1 / temperature) for visit_count_i in visit_counts]
     total_count = sum(action_probs)

@@ -197,9 +197,9 @@ class MCTS(object):
                 true_observations_nodes = visitation_counter.get_next_true_observation_indexes(true_observations, last_actions)
                 # Compute the uncertainties based on the visitation counter
                 if self.config.plan_with_visitation_counter:
-                    value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations, last_actions, use_state_visits=True)
+                    value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations, last_actions, use_state_visits=True).tolist()
                     # Compute the PROPAGATED value uncertainty, by doing Monte-Carlo sims with the real model for sampling_times sims, up to horizon propagation_horizon
-                    value_variance_pool = visitation_counter.get_propagated_value_uncertainty(true_observations, propagation_horizon=value_propagation_horizon, sampling_times=5, use_state_visits=True)
+                    value_variance_pool = visitation_counter.get_propagated_value_uncertainty(true_observations, propagation_horizon=value_propagation_horizon, sampling_times=0, use_state_visits=True).tolist()
 
                 last_actions = torch.from_numpy(np.asarray(last_actions)).to(device).unsqueeze(1).long()
 

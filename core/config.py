@@ -459,6 +459,9 @@ class BaseConfig(object):
             # Ensemble network arch.
             self.ensemble_size = 5
 
+            if args.case == 'deep_sea':
+                self.ensemble_size = 10
+
         if args.cluster and args.case == 'atari':
             # Base network arch.
             self.lstm_hidden_size = 512
