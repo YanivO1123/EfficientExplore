@@ -42,12 +42,14 @@ class BatchWorker_CPU(object):
         self.batch_max_num = 20
         self.beta_schedule = LinearSchedule(config.training_steps + config.last_steps, initial_p=config.priority_prob_beta, final_p=1.0)
 
-    # TODO: Complete the UBE context preparation
+    # TODO: Complete the UBE context preparation - if it's even necessary, because I might want to rely on
+    #  reward-value-context
     def _prepare_ube_context(self, indices, games, state_index_lst, total_transitions):
         return NotImplementedError
 
     def _prepare_reward_value_context(self, indices, games, state_index_lst, total_transitions):
-        """prepare the context of rewards and values for reanalyzing part
+        """
+        prepare the context of rewards and values for reanalyzing part
         Parameters
         ----------
         indices: list
@@ -97,6 +99,84 @@ class BatchWorker_CPU(object):
 
         value_obs_lst = ray.put(value_obs_lst)
         reward_value_context = [value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst]
+        return reward_value_context
+
+    def _prepare_reward_value_context_w_max_targets(self, indices, games, state_index_lst, total_transitions):
+        """
+        prepare the context of rewards and values for reanalyzing part
+        Parameters
+        ----------
+        indices: list
+            transition index in replay buffer
+        games: list
+            list of game histories
+        state_index_lst: list
+            transition index in game
+        total_transitions: int
+            number of collected transitions
+        """
+        zero_obs = games[0].zero_obs()
+        config = self.config
+        value_obs_lst = []
+        # the value is valid or not (out of trajectory)
+        value_mask = []
+        rewards_lst = []
+        traj_lens = []
+
+        td_steps_lst = []
+
+        # MuExplore:
+        exploration_episodes = []
+        zero_step_value_obs_lst = []
+
+        for game, state_index, idx in zip(games, state_index_lst, indices):
+            traj_len = len(game)
+            traj_lens.append(traj_len)
+
+            # off-policy correction: shorter horizon of td steps
+            delta_td = (total_transitions - idx) // config.auto_td_steps
+            td_steps = config.td_steps - delta_td
+            td_steps = np.clip(td_steps, 1, config.td_steps).astype(np.int)
+            # MuExplore: store the type of episode
+            exploration_episodes.append(game.exploration_episode)
+
+            # prepare the corresponding observations for bootstrapped values o_{t+k}
+            game_obs = game.obs(state_index + td_steps, config.num_unroll_steps)
+            # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
+            current_value_game_obs = game.obs(state_index, config.num_unroll_steps)
+
+            rewards_lst.append(game.rewards)
+            for current_index in range(state_index, state_index + config.num_unroll_steps + 1):
+                td_steps_lst.append(td_steps)
+                bootstrap_index = current_index + td_steps
+
+                if bootstrap_index < traj_len:
+                    value_mask.append(1)
+                    beg_index = bootstrap_index - (state_index + td_steps)
+                    end_index = beg_index + config.stacked_observations
+                    obs = game_obs[beg_index:end_index]
+                    # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
+                    zero_step_obs = current_value_game_obs[beg_index:end_index]
+
+                #TODO: MuExplore: if the bootstrap_index is outside of the trajectory, but not for 0-step values, in
+                # principle I need to compute the 0-step value. However, this can induce ignoring terminals, which is
+                # really dangerous, so instead I'm leaving this as is
+                else:
+                    value_mask.append(0)
+                    obs = zero_obs
+                    # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
+                    zero_step_obs = zero_obs
+
+                value_obs_lst.append(obs)
+                # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
+                zero_step_value_obs_lst.append(zero_step_obs)
+
+        assert np.shape(value_obs_lst) == np.shape(zero_step_value_obs_lst), f"Error in computing observations for max targets. np.shape(value_obs_lst) = {np.shape(value_obs_lst)}, np.shape(zero_step_value_obs_lst) = {np.shape(zero_step_value_obs_lst)}"
+        value_obs_lst = ray.put(value_obs_lst)
+        # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
+        zero_step_value_obs_lst = ray.put(zero_step_value_obs_lst)
+
+        reward_value_context = [value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst]
         return reward_value_context
 
     def _prepare_policy_non_re_context(self, indices, games, state_index_lst):
@@ -213,7 +293,13 @@ class BatchWorker_CPU(object):
         total_transitions = ray.get(self.replay_buffer.get_total_len.remote())
 
         # obtain the context of value targets
-        reward_value_context = self._prepare_reward_value_context(indices_lst, game_lst, game_pos_lst, total_transitions)
+        if self.config.use_max_value_targets:
+            # If uses max targets, the context contains two more things: episode type, and observations to compute 0-step values
+            reward_value_context = self._prepare_reward_value_context_w_max_targets(indices_lst, game_lst, game_pos_lst,
+                                                                      total_transitions)
+        else:
+            reward_value_context = self._prepare_reward_value_context(indices_lst, game_lst, game_pos_lst,
+                                                                      total_transitions)
 
         # 0:re_num -> reanalyzed policy, re_num:end -> non reanalyzed policy
         # reanalyzed policy
@@ -230,7 +316,7 @@ class BatchWorker_CPU(object):
         else:
             policy_non_re_context = None
 
-        # TODO: Compute ube context with self._prepare_ube_context
+        # TODO: Compute ube context with self._prepare_ube_context - if even necessary
 
         # TODO: Change context structure to pass UBE context
         countext = reward_value_context, policy_re_context, policy_non_re_context, inputs_batch, weights
@@ -404,6 +490,135 @@ class BatchWorker_GPU(object):
         batch_values = np.asarray(batch_values)
         return batch_value_prefixs, batch_values
 
+    def _prepare_reward_value_max_targets(self, reward_value_context):
+        """
+            prepare reward and max-value targets from the context of rewards and values.
+            The max-value target is computed as follows: max(n_step_value, 0_step_value).
+            The max target is only used in exploration episodes.
+            The function _prepare_reward_value_max_targets() is only compatible with reward_value_context that has been
+                prepared by the function _prepare_reward_value_context_w_max_targets()
+        """
+        value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst = reward_value_context
+        value_obs_lst = ray.get(value_obs_lst)
+        zero_step_value_obs_lst = ray.get(zero_step_value_obs_lst)
+        device = self.config.device
+        batch_size = len(value_obs_lst)
+
+        batch_values, batch_value_prefixs = [], []
+        with torch.no_grad():
+            value_obs_lst = prepare_observation_lst(value_obs_lst)
+            zero_step_value_obs_lst = prepare_observation_lst(zero_step_value_obs_lst)
+            # split a full batch into slices of mini_infer_size: to save the GPU memory for more GPU actors
+            m_batch = self.config.mini_infer_size
+            slices = np.ceil(batch_size / m_batch).astype(np.int_)
+            network_output = []
+            network_output_zero_step = []
+            for i in range(slices):
+                beg_index = m_batch * i
+                end_index = m_batch * (i + 1)
+                m_obs = torch.from_numpy(value_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                m_obs_zero_step = torch.from_numpy(zero_step_value_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                if self.config.amp_type == 'torch_amp':
+                    with autocast():
+                        m_output = self.model.initial_inference(m_obs)
+                        m_zero_step = self.model.initial_inference(m_obs_zero_step)
+                else:
+                    m_output = self.model.initial_inference(m_obs)
+                    m_zero_step = self.model.initial_inference(m_obs_zero_step)
+                network_output.append(m_output)
+                network_output_zero_step.append(m_zero_step)
+
+            # concat the output slices after model inference
+            if self.config.use_root_value:
+                # use the root values from MCTS
+                # the root values have limited improvement but require much more GPU actors;
+                _, value_prefix_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_output(network_output)
+                value_prefix_pool = value_prefix_pool.squeeze().tolist()
+                policy_logits_pool = policy_logits_pool.tolist()
+                roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations)
+                noises = [np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(np.float32).tolist() for _ in range(batch_size)]
+                # TODO: Do I really want to create NOISY roots as targets?
+                roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool, policy_logits_pool)
+                MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots)
+                roots_values = roots.get_values()
+                value_lst = np.array(roots_values)
+
+                # MuExplore: Do the same for zero_step_value:
+                _, value_prefix_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_output(
+                    network_output_zero_step)
+                value_prefix_pool = value_prefix_pool.squeeze().tolist()
+                policy_logits_pool = policy_logits_pool.tolist()
+                roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations)
+                noises = [
+                    np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
+                        np.float32).tolist() for _ in range(batch_size)]
+                # TODO: Do I really want to create NOISY roots as targets?
+                roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool, policy_logits_pool)
+                MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots)
+                roots_values = roots.get_values()
+                value_lst_zero_step = np.array(roots_values)
+            else:
+                # use the predicted values
+                value_lst = concat_output_value(network_output)
+                value_lst_zero_step = concat_output_value(network_output_zero_step)
+
+            # get last state value
+            value_lst = value_lst.reshape(-1) * (np.array([self.config.discount for _ in range(batch_size)]) ** td_steps_lst)
+            value_lst = value_lst * np.array(value_mask)
+            value_lst = value_lst.tolist()
+
+            # MuExplore: set the 0-step values to the same format
+            value_lst_zero_step = value_lst_zero_step.reshape(-1)   # This is a 0-step target, there's no need to discount
+            value_lst_zero_step = value_lst_zero_step * np.array(value_mask)
+            value_lst_zero_step = value_lst_zero_step.tolist()
+
+            value_index = 0
+            for traj_len_non_re, reward_lst, state_index, exploration_episode in zip(traj_lens, rewards_lst, state_index_lst, exploration_episodes):
+                # traj_len = len(game)
+                target_values = []
+                target_value_prefixs = []
+
+                horizon_id = 0
+                value_prefix = 0.0
+                base_index = state_index
+
+                # TODO: if exploration_episode, do value target = max(local, discounted)
+                # TODO: get the current-state values to compare
+
+                for current_index in range(state_index, state_index + self.config.num_unroll_steps + 1):
+                    bootstrap_index = current_index + td_steps_lst[value_index]
+                    # for i, reward in enumerate(game.rewards[current_index:bootstrap_index]):
+                    for i, reward in enumerate(reward_lst[current_index:bootstrap_index]):
+                        value_lst[value_index] += reward * self.config.discount ** i
+
+                    # reset every lstm_horizon_len
+                    if horizon_id % self.config.lstm_horizon_len == 0:
+                        value_prefix = 0.0
+                        base_index = current_index
+                    horizon_id += 1
+
+                    if current_index < traj_len_non_re:
+                        # MuExplore: Max targets:
+                        if value_lst[value_index] < value_lst_zero_step[value_index] and exploration_episode:
+                            target_values.append(value_lst_zero_step[value_index])
+                        else:
+                            target_values.append(value_lst[value_index])
+                        # Since the horizon is small and the discount is close to 1.
+                        # Compute the reward sum to approximate the value prefix for simplification
+                        value_prefix += reward_lst[current_index]  # * config.discount ** (current_index - base_index)
+                        target_value_prefixs.append(value_prefix)
+                    else:
+                        target_values.append(0)
+                        target_value_prefixs.append(value_prefix)
+                    value_index += 1
+
+                batch_value_prefixs.append(target_value_prefixs)
+                batch_values.append(target_values)
+
+        batch_value_prefixs = np.asarray(batch_value_prefixs)
+        batch_values = np.asarray(batch_values)
+        return batch_value_prefixs, batch_values
+
     def _prepare_policy_re(self, policy_re_context):
         """prepare policy targets from the reanalyzed context of policies
         """
@@ -507,7 +722,10 @@ class BatchWorker_GPU(object):
                 self.model.eval()
 
             # target reward, value
-            batch_value_prefixs, batch_values = self._prepare_reward_value(reward_value_context)
+            if self.config.use_max_value_targets:
+                batch_value_prefixs, batch_values = self._prepare_reward_value_max_targets(reward_value_context)
+            else:
+                batch_value_prefixs, batch_values = self._prepare_reward_value(reward_value_context)
             # target policy
             batch_policies_re = self._prepare_policy_re(policy_re_context)
             batch_policies_non_re = self._prepare_policy_non_re(policy_non_re_context)

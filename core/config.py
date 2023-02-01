@@ -83,6 +83,7 @@ class BaseConfig(object):
                  beta: float = 1E+6,
                  disable_policy_in_exploration: bool = True,
                  training_ratio: float = 1,
+                 use_max_value_targets: bool = False,
                  ):
         """Base Config for EfficietnZero
         Parameters
@@ -228,6 +229,9 @@ class BaseConfig(object):
         training_ratio: float
             a float >= 1, guarantees that ratio: % trained steps / % transitions >= training_ratio
             The purpose is to encourage / require / enable the agent to train much more than interact.
+        use_max_value_targets: bool
+            If True, uses max_targets (see paper, learning from exploratory decisions). Otherwise, does standard
+            EfficientZero.
         """
         # Self-Play
         self.action_space_size = None
@@ -340,6 +344,9 @@ class BaseConfig(object):
 
         # control training / interactions ratio
         self.training_ratio = training_ratio
+
+        # Target types in exploration
+        self.use_max_value_targets = use_max_value_targets
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -476,14 +483,19 @@ class BaseConfig(object):
         elif args.beta is not None and args.beta < 0:
             print(f"In parameter setup, received illegal beta value < 0. Setting the currently configured default beta "
                   f"instead: beta = {self.beta}")
-        self.mu_explore = args.mu_explore
-        self.use_uncertainty_architecture = args.uncertainty_architecture
-        self.disable_policy_in_exploration = args.disable_policy_in_exploration
-        self.root_exploration_fraction = args.exploration_fraction
         if args.case == 'deep_sea':
             self.use_visitation_counter = args.visit_counter
             # only use visit_counter in planning when it's enabled
             self.plan_with_visitation_counter = args.p_w_vis_counter and args.visit_counter
+        self.use_uncertainty_architecture = args.uncertainty_architecture
+        # MuExplore is only applicable with some uncertainty mechanism
+        assert args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter) or not args.mu_explore
+        self.mu_explore = args.mu_explore and (self.use_uncertainty_architecture or self.use_visitation_counter)
+        self.disable_policy_in_exploration = args.disable_policy_in_exploration
+        self.root_exploration_fraction = args.exploration_fraction
+        if args.use_max_value_targets and self.mu_explore:
+            self.use_max_value_targets = args.use_max_value_targets
+        # Else, uses use_max_value_targets from the config
 
         if not self.do_consistency:
             self.consistency_coeff = 0

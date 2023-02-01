@@ -145,8 +145,10 @@ class DataWorker(object):
 
                 init_obses = [env.reset() for env in envs]
                 dones = np.array([False for _ in range(env_nums)])
-                game_histories = [GameHistory(envs[_].env.action_space, max_length=self.config.history_length,
-                                              config=self.config) for _ in range(env_nums)]
+                game_histories = [GameHistory(envs[i].env.action_space, max_length=self.config.history_length,
+                                              config=self.config,
+                                              exploration_episode=(i != 0 and self.config.mu_explore))
+                                  for i in range(env_nums)]
                 last_game_histories = [None for _ in range(env_nums)]
                 last_game_priorities = [None for _ in range(env_nums)]
 
@@ -254,7 +256,8 @@ class DataWorker(object):
                             envs[i].close()
                             init_obs = envs[i].reset()
                             game_histories[i] = GameHistory(env.env.action_space, max_length=self.config.history_length,
-                                                            config=self.config)
+                                                            config=self.config,
+                                                            exploration_episode=(i != 0 and self.config.mu_explore))
                             last_game_histories[i] = None
                             last_game_priorities[i] = None
                             stack_obs_windows[i] = [init_obs for _ in range(self.config.stacked_observations)]
@@ -341,6 +344,7 @@ class DataWorker(object):
                             distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
                         elif 'deep_sea' in self.config.env_name:    # We don't want random actions in deep_sea
                             distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
+                            deterministic = True
                         else:
                             # before starting training, use random policy
                             value, temperature, env = roots_values[i], _temperature[i], envs[i]
@@ -404,7 +408,8 @@ class DataWorker(object):
 
                             # new block trajectory
                             game_histories[i] = GameHistory(envs[i].env.action_space, max_length=self.config.history_length,
-                                                            config=self.config)
+                                                            config=self.config,
+                                                            exploration_episode=(i != 0 and self.config.mu_explore))
                             game_histories[i].init(stack_obs_windows[i])
 
                     if self.config.mu_explore:

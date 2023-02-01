@@ -72,8 +72,9 @@ if __name__ == '__main__':
     parser.add_argument('--p_w_vis_counter', action='store_true', default=False,
                         help="If the env. is deep sea, use the visit counter in MCTS planning with muexplore. "
                              "Otherwise, does nothing.")
-
-
+    parser.add_argument('--use_max_value_targets', action='store_true', default=False,
+                        help="Use max targets in exploratory episodes. Only applicable with MuExplore. If not specified,"
+                             "uses use_max_value_targets from the config (which defaults to false unless set otherwise)")
 
     # Process arguments
     args = parser.parse_args()

@@ -34,7 +34,7 @@ class GameHistory:
     A block of game history from a full trajectories.
     The horizons of Atari games are quite large. Split the whole trajectory into several history blocks.
     """
-    def __init__(self, action_space, max_length=200, config=None):
+    def __init__(self, action_space, max_length=200, config=None, exploration_episode=False):
         """
         Parameters
         ----------
@@ -42,6 +42,8 @@ class GameHistory:
             action space
         max_length: int
             max transition number of the history block
+        exploration_episode: bool
+            Whether this episode was an exploration episode or not (practice or testing episode)
         """
         self.action_space = action_space
         self.max_length = max_length
@@ -56,6 +58,8 @@ class GameHistory:
         # dim of size 1
         if "deep_sea" in self.config.env_name:
             self.zero_obs_shape = (config.obs_shape[-2], config.obs_shape[-1])
+        # MuExplore:
+        self.exploration_episode = exploration_episode
 
         self.child_visits = []
         self.root_values = []
@@ -190,6 +194,7 @@ class GameHistory:
         else:
             self.child_visits[idx] = [visit_count / sum_visits for visit_count in visit_counts]
             self.root_values[idx] = root_value
+        # TODO: Add storing of uncertainty for UBE
 
     def __len__(self):
         return len(self.actions)

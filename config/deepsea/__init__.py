@@ -102,8 +102,8 @@ class DeepSeaConfig(BaseConfig):
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         if self.change_temperature:
-            if self.use_visitation_counter or self.mu_explore:
-                return 0.0
+            # if self.use_visitation_counter or self.mu_explore:
+            #     return 0.0
             if trained_steps < 0.5 * (self.training_steps):
                 return 1.0
             elif trained_steps < 0.75 * (self.training_steps):
