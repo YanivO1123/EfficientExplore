@@ -468,6 +468,7 @@ class BaseConfig(object):
 
             if args.case == 'deep_sea':
                 self.ensemble_size = 10
+                self.start_transitions = max(256, self.batch_size)
 
         if args.cluster and args.case == 'atari':
             # Base network arch.

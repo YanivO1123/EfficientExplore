@@ -4,8 +4,8 @@ from core.config import BaseConfig
 from core.utils import make_deepsea, EpisodicLifeEnv
 from core.dataset import Transforms
 from config.deepsea.env_wrapper import DeepSeaWrapper
-from config.atari.model import EfficientZeroNet
-from config.atari.model import EfficientExploreNet
+from config.deepsea.model import EfficientZeroNet
+from config.deepsea.model import EfficientExploreNet
 from core.config import DiscreteSupport
 import bsuite
 from bsuite.utils import gym_wrapper
@@ -15,7 +15,7 @@ class DeepSeaConfig(BaseConfig):
     def __init__(self):
         super(DeepSeaConfig, self).__init__(
             training_steps=50000, #100000,
-            last_steps=1000,#20000
+            last_steps=5000,#20000
             test_interval=500, #10000,
             log_interval=500,
             vis_interval=1000,
@@ -36,7 +36,6 @@ class DeepSeaConfig(BaseConfig):
             # network initialization/ & normalization
             episode_life=False, # This uses properties of real gym
             init_zero=True,
-            state_norm=False,
             clip_reward=False,  # no need to clip reward in deepsea
             # storage efficient
             cvt_string=False,    # deepsea returns a 1 hot encoding, no need to
@@ -45,13 +44,13 @@ class DeepSeaConfig(BaseConfig):
             lr_warm_up=0.01,
             lr_init=0.2,
             lr_decay_rate=0.1,
-            lr_decay_steps=100000,
+            lr_decay_steps=50000,
             auto_td_steps_ratio=0.1, # 0.3,
             # replay window
-            start_transitions=256,
+            start_transitions=64,
             total_transitions=100 * 1000,
             transition_num=1,
-            do_consistency=False,
+            do_consistency=True,
             # frame skip & stack observation
             frame_skip=1,      # TODO: I believe this is skipping * 1
             stacked_observations=4,
@@ -61,13 +60,13 @@ class DeepSeaConfig(BaseConfig):
             policy_loss_coeff=1,
             consistency_coeff=2,
             # reward sum
-            lstm_hidden_size=64, #512,    # TODO: Can lower aggressively
+            lstm_hidden_size=128, #512,    # TODO: Can lower aggressively
             lstm_horizon_len=5,
             # siamese
-            proj_hid=32, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            proj_out=32, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            pred_hid=16, #512,     # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            pred_out=32, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            proj_hid=64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            proj_out=64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            pred_hid=32, #512,     # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            pred_out=64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
             value_support=DiscreteSupport(-15, 15, delta=1),
             reward_support=DiscreteSupport(-15, 15, delta=1),
             # MuExplore
@@ -90,20 +89,17 @@ class DeepSeaConfig(BaseConfig):
 
         self.bn_mt = 0.1
         self.blocks = 1  # Number of blocks in the ResNet
-        self.channels = 4 # 64 # Number of channels in the ResNet
-        self.reduced_channels_reward = 4 # 16  # x36 Number of channels in reward head
-        self.reduced_channels_value = 4 # 16  # x36 Number of channels in value head
-        self.reduced_channels_policy = 4 # 16  # x36 Number of channels in policy head
-        self.fc_representation_layers = [16]
-        self.resnet_fc_reward_layers = [16, 16] # [32]  # Define the hidden layers in the reward head of the dynamic network
-        self.resnet_fc_value_layers = [16, 16] # [32]  # Define the hidden layers in the value head of the prediction network
-        self.resnet_fc_policy_layers = [16] # [32]  # Define the hidden layers in the policy head of the prediction network
+        self.channels = 8 # 64 # Number of channels in the ResNet
+        self.reduced_channels_reward = 8 # 16  # x36 Number of channels in reward head
+        self.reduced_channels_value = 8 # 16  # x36 Number of channels in value head
+        self.reduced_channels_policy = 8 # 16  # x36 Number of channels in policy head
+        self.resnet_fc_reward_layers = [32, 32] # [32]  # Define the hidden layers in the reward head of the dynamic network
+        self.resnet_fc_value_layers = [32, 32] # [32]  # Define the hidden layers in the value head of the prediction network
+        self.resnet_fc_policy_layers = [32] # [32]  # Define the hidden layers in the policy head of the prediction network
         self.downsample = False  # Downsample observations before representation network (See paper appendix Network Architecture)
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         if self.change_temperature:
-            # if self.use_visitation_counter or self.mu_explore:
-            #     return 0.0
             if trained_steps < 0.5 * (self.training_steps):
                 return 1.0
             elif trained_steps < 0.75 * (self.training_steps):
@@ -184,25 +180,7 @@ class DeepSeaConfig(BaseConfig):
 
     def new_game(self, seed=None, save_video=False, save_path=None, video_callable=None, uid=None, test=False,
                  final_test=False):
-        # if test:
-        #     if final_test:
-        #         max_moves = self.max_moves // self.frame_skip
-        #     else:
-        #         max_moves = self.test_max_moves
-        #     env = make_deepsea(self.env_name, skip=self.frame_skip, max_episode_steps=max_moves)
-        # else:
-        #     env = make_deepsea(self.env_name, skip=self.frame_skip, max_episode_steps=self.max_moves)
-        #
-        # if self.episode_life and not test:
-        #     env = EpisodicLifeEnv(env)
-        # env = WarpFrame(env, width=self.obs_shape[1], height=self.obs_shape[2], grayscale=self.gray_scale)
-
-        # It's important to seed the mapping_seed with the same seed for all envs - otherwise, the agent tries to learn
-        # different envs at the same time..
         env = make_deepsea(self.env_name, seed=self.seed)
-
-        # if seed is not None:
-        #     env.seed(seed)
 
         if save_video:
             print("Does not have save_video option in deep_sea, proceeding without")

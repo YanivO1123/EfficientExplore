@@ -346,11 +346,6 @@ class PredictionNetwork(nn.Module):
         self.block_output_size_policy = block_output_size_policy
         self.fc_value = mlp(self.block_output_size_value, fc_value_layers, full_support_size, init_zero=init_zero, momentum=momentum)
         self.fc_policy = mlp(self.block_output_size_policy, fc_policy_layers, action_space_size, init_zero=init_zero, momentum=momentum)
-        # self.fc_value = mlp(num_channels, fc_value_layers, full_support_size, init_zero=init_zero,
-        #                     momentum=momentum)
-        # self.fc_policy = mlp(num_channels, fc_policy_layers, action_space_size, init_zero=init_zero,
-        #                      momentum=momentum)
-
 
     def forward(self, x):
         for block in self.resblocks:
@@ -367,9 +362,6 @@ class PredictionNetwork(nn.Module):
         policy = policy.view(-1, self.block_output_size_policy)
         value = self.fc_value(value)
         policy = self.fc_policy(policy)
-        # value = self.fc_value(x)
-        # policy = self.fc_policy(x)
-
         return policy, value
 
 
@@ -383,7 +375,6 @@ class EfficientZeroNet(BaseNet):
         reduced_channels_reward,
         reduced_channels_value,
         reduced_channels_policy,
-        fc_representation_layers,
         fc_reward_layers,
         fc_value_layers,
         fc_policy_layers,
@@ -489,13 +480,6 @@ class EfficientZeroNet(BaseNet):
             if downsample
             else (reduced_channels_policy * observation_shape[1] * observation_shape[2])
         )
-        # self.representation_network = mlp(observation_shape[0] * observation_shape[1] * observation_shape[2],
-        #                                   fc_representation_layers,
-        #                                   num_channels,
-        #                                   output_activation=nn.Identity,
-        #                                   activation=nn.ReLU,
-        #                                   momentum=0.1,
-        #                                   init_zero=False)
 
         self.representation_network = RepresentationNetwork(
             observation_shape,
@@ -533,7 +517,7 @@ class EfficientZeroNet(BaseNet):
         )
 
         # projection
-        in_dim = num_channels * math.ceil(observation_shape[1] / 16) * math.ceil(observation_shape[2] / 16)
+        in_dim = num_channels * observation_shape[1] * observation_shape[2] # num_channels * math.ceil(observation_shape[1] / 16) * math.ceil(observation_shape[2] / 16)
         self.porjection_in_dim = in_dim
         self.projection = nn.Sequential(
             nn.Linear(self.porjection_in_dim, self.proj_hid),
@@ -557,7 +541,6 @@ class EfficientZeroNet(BaseNet):
         return policy, value
 
     def representation(self, observation):
-        # encoded_state = self.representation_network(observation.view(observation.shape[0], -1))
         encoded_state = self.representation_network(observation)
         if not self.state_norm:
             return encoded_state
