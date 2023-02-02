@@ -75,6 +75,11 @@ if __name__ == '__main__':
     parser.add_argument('--use_max_value_targets', action='store_true', default=False,
                         help="Use max targets in exploratory episodes. Only applicable with MuExplore. If not specified,"
                              "uses use_max_value_targets from the config (which defaults to false unless set otherwise)")
+    parser.add_argument('--plan_w_fake_visit_counter', action='store_true', default=False,
+                        help="For debugging. If true, unc. associated with rewarding state is always maximized")
+    parser.add_argument('--plan_w_state_visits', action='store_true', default=False,
+                        help="If true uses state visits. Otherwise, will use state-action visits."
+                             "Only relevant if uses p_w_vis_counter, ")
 
     # Process arguments
     args = parser.parse_args()

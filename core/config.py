@@ -341,6 +341,8 @@ class BaseConfig(object):
         # visitation counter
         self.use_visitation_counter = use_visitation_counter
         self.plan_with_visitation_counter = plan_with_visitation_counter
+        self.plan_with_state_visits = False
+        self.plan_with_fake_visit_counter = False
 
         # control training / interactions ratio
         self.training_ratio = training_ratio
@@ -468,7 +470,7 @@ class BaseConfig(object):
 
             if args.case == 'deep_sea':
                 self.ensemble_size = 10
-                self.start_transitions = max(256, self.batch_size)
+                self.start_transitions = max(self.start_transitions, self.batch_size)
 
         if args.cluster and args.case == 'atari':
             # Base network arch.
@@ -488,6 +490,9 @@ class BaseConfig(object):
             self.use_visitation_counter = args.visit_counter
             # only use visit_counter in planning when it's enabled
             self.plan_with_visitation_counter = args.p_w_vis_counter and args.visit_counter
+            if self.plan_with_visitation_counter:
+                self.plan_with_fake_visit_counter = args.plan_w_fake_visit_counter
+                self.plan_with_state_visits = args.plan_w_state_visits
         self.use_uncertainty_architecture = args.uncertainty_architecture
         # MuExplore is only applicable with some uncertainty mechanism
         assert args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter) or not args.mu_explore

@@ -14,8 +14,8 @@ from bsuite.utils import gym_wrapper
 class DeepSeaConfig(BaseConfig):
     def __init__(self):
         super(DeepSeaConfig, self).__init__(
-            training_steps=50000, #100000,
-            last_steps=5000,#20000
+            training_steps=100000, #100000,
+            last_steps=20000,#20000
             test_interval=500, #10000,
             log_interval=500,
             vis_interval=1000,
@@ -31,7 +31,7 @@ class DeepSeaConfig(BaseConfig):
             value_delta_max=0.01,
             num_simulations=50,
             batch_size=64, # 32 # 64 #256,  # TODO: can be larger with smaller net
-            td_steps=3, # 5,
+            td_steps=10, # 5,
             num_actors=1,
             # network initialization/ & normalization
             episode_life=False, # This uses properties of real gym
@@ -47,7 +47,7 @@ class DeepSeaConfig(BaseConfig):
             lr_decay_steps=50000,
             auto_td_steps_ratio=0.1, # 0.3,
             # replay window
-            start_transitions=64,
+            start_transitions=400,
             total_transitions=100 * 1000,
             transition_num=1,
             do_consistency=True,

@@ -120,7 +120,7 @@ class DataWorker(object):
         print(f"Envs started", flush=True)
         # MuExplore: start the visitation counter if it's wanted
         if self.config.use_visitation_counter and 'deep_sea' in self.config.env_name:
-            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=env_nums, mapping_seed=self.config.seed)
+            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=env_nums, mapping_seed=self.config.seed, fake=self.config.plan_with_fake_visit_counter)
             print(f"Initiated visitation counter", flush=True)
         def _get_max_entropy(action_space):
             p = 1.0 / action_space
@@ -327,7 +327,7 @@ class DataWorker(object):
                     # MuExplore: if we wish to use a visitation counter:
                     if self.config.use_visitation_counter and self.visitation_counter is not None:
                         MCTS(self.config).search_w_visitation_counter(roots, model, hidden_state_roots, reward_hidden_roots,
-                                                 self.visitation_counter, initial_observations_for_counter)
+                                                 self.visitation_counter, initial_observations_for_counter, use_state_visits=self.config.plan_with_state_visits)
                     else:   # Otherwise
                         # do MCTS for a policy
                         MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots)
@@ -352,14 +352,14 @@ class DataWorker(object):
 
                         action, visit_entropy = select_action(distributions, temperature=temperature, deterministic=deterministic)
                         # MuExplore: Add state-action to visitation counter
-                        if self.config.use_visitation_counter:
+                        if self.config.use_visitation_counter and i > 0: # this will show ONLY what the exploratory episodes are doing, for debugging
                             # Take the last observation that was stored, and the current action
                             self.visitation_counter.observe(game_histories[i].obs_history[-1], action)
 
                         obs, ori_reward, done, info = env.step(action)
 
                         if ori_reward > 0 and 'deep_sea' in self.config.env_name:
-                            ori_reward = ori_reward * 100
+                            ori_reward = ori_reward * 10
                             print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
                                   f"Encountered reward: {ori_reward}. Env index is :{i}. "
                                   f"State is: {initial_observations_for_counter[i]}, and action is: {action} \n"
@@ -429,9 +429,10 @@ class DataWorker(object):
                                   f"{value_unc_sum / (total_transitions * 3 / 4) } \n"
                                   , flush=True)
 
-                    if 'deep_sea' in self.config.env_name and (total_transitions - self.config.p_mcts_num) % (self.config.test_interval) == 0:
+                    if 'deep_sea' in self.config.env_name and (total_transitions - self.config.p_mcts_num) % 20 == 0: # % (self.config.test_interval)
                         print(f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
-                              f"Printing the state-action visitation counter at the last row: {self.visitation_counter.sa_counts[-1, :, :]} \n"
+                              f"Printing the state-action visitation counter at the last row: \n"
+                              f"{self.visitation_counter.sa_counts[-1, :, :]} \n"
                               f"Printing the state visitation counter: \n"
                               f"{self.visitation_counter.s_counts}"
                               , flush=True)
