@@ -94,6 +94,7 @@ class AtariConfig(BaseConfig):
         self.resnet_fc_reward_layers = [32, 32] # [32] # Define the hidden layers in the reward head of the dynamic network
         self.resnet_fc_value_layers = [32, 32] # [32] # Define the hidden layers in the value head of the prediction network
         self.resnet_fc_policy_layers = [32]  # Define the hidden layers in the policy head of the prediction network
+        self.resnet_fc_rnd_layers = [1024, 1024, 1024, 256]  # The last number is interpreted as outputsize
         self.downsample = True  # Downsample observations before representation network (See paper appendix Network Architecture)
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
@@ -132,6 +133,7 @@ class AtariConfig(BaseConfig):
                 self.resnet_fc_reward_layers,
                 self.resnet_fc_value_layers,
                 self.resnet_fc_policy_layers,
+                self.resnet_fc_rnd_layers,
                 self.reward_support.size,
                 self.value_support.size,
                 self.downsample,

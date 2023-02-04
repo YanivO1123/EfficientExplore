@@ -114,9 +114,9 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
     if config.amp_type == 'torch_amp':
         with autocast():
-            value, _, policy_logits, hidden_state, reward_hidden, _, _ = model.initial_inference(obs_batch)
+            value, _, policy_logits, hidden_state, reward_hidden, value_variance, _ = model.initial_inference(obs_batch)
     else:
-        value, _, policy_logits, hidden_state, reward_hidden, _, _ = model.initial_inference(obs_batch)
+        value, _, policy_logits, hidden_state, reward_hidden, value_variance, _ = model.initial_inference(obs_batch)
     scaled_value = config.inverse_value_transform(value)
 
     if vis_result:
@@ -136,6 +136,16 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     policy_loss = -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, 0]).sum(1)
     value_prefix_loss = torch.zeros(batch_size, device=config.device)
     consistency_loss = torch.zeros(batch_size, device=config.device)
+
+    # Rnd loss:
+    if config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube':
+        # flatten the state
+        hidden_state_for_rnd = hidden_state.view(-1, model.input_size_rnd).float().detach()
+        prediction = model.rnd_network(hidden_state_for_rnd)
+        target = model.rnd_target_network(hidden_state_for_rnd).detach()
+        rnd_loss = config.rnd_loss(prediction, target).sum(1).mean()
+    else:
+        rnd_loss = 0
 
     target_value_prefix_cpu = target_value_prefix.detach().cpu()
     gradient_scale = 1 / config.num_unroll_steps
@@ -256,7 +266,11 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     # weighted loss with masks (some invalid states which are out of trajectory.)
     loss = (config.consistency_coeff * consistency_loss + config.policy_loss_coeff * policy_loss +
             config.value_loss_coeff * value_loss + config.reward_loss_coeff * value_prefix_loss)
-    weighted_loss = (weights * loss).mean()
+
+    if config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube':
+        weighted_loss = (weights * loss).mean() + rnd_loss
+    else:
+        weighted_loss = (weights * loss).mean()
 
     # backward
     parameters = model.parameters()

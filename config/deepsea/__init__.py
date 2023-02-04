@@ -30,7 +30,7 @@ class DeepSeaConfig(BaseConfig):
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
-            batch_size=64, # 32 # 64 #256,  # TODO: can be larger with smaller net
+            batch_size=32, # 32 # 64 #256,  # TODO: can be larger with smaller net
             td_steps=10, # 5,
             num_actors=1,
             # network initialization/ & normalization
@@ -47,7 +47,7 @@ class DeepSeaConfig(BaseConfig):
             lr_decay_steps=50000,
             auto_td_steps_ratio=0.1, # 0.3,
             # replay window
-            start_transitions=400,
+            start_transitions=500,
             total_transitions=100 * 1000,
             transition_num=1,
             do_consistency=True,
@@ -56,23 +56,23 @@ class DeepSeaConfig(BaseConfig):
             stacked_observations=4,
             # coefficient
             reward_loss_coeff=1,
-            value_loss_coeff=0.25,
+            value_loss_coeff=1, # 0.25,
             policy_loss_coeff=1,
             consistency_coeff=2,
             # reward sum
             lstm_hidden_size=128, #512,    # TODO: Can lower aggressively
             lstm_horizon_len=5,
             # siamese
-            proj_hid=64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            proj_out=64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            pred_hid=32, #512,     # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            pred_out=64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            proj_hid=1024, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            proj_out=1024, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            pred_hid=512, # 32, #512,     # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            pred_out=1024, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
             value_support=DiscreteSupport(-15, 15, delta=1),
             reward_support=DiscreteSupport(-15, 15, delta=1),
             # MuExplore
             # Architecture
             use_uncertainty_architecture=False,
-            ensemble_size=5,
+            ensemble_size=3,
             use_network_prior=True,
             prior_scale=10.0,
             # visitation counter
@@ -96,6 +96,7 @@ class DeepSeaConfig(BaseConfig):
         self.resnet_fc_reward_layers = [32, 32] # [32]  # Define the hidden layers in the reward head of the dynamic network
         self.resnet_fc_value_layers = [32, 32] # [32]  # Define the hidden layers in the value head of the prediction network
         self.resnet_fc_policy_layers = [32] # [32]  # Define the hidden layers in the policy head of the prediction network
+        self.resnet_fc_rnd_layers = [1024, 1024, 1024, 256] # The last number is interpreted as outputsize
         self.downsample = False  # Downsample observations before representation network (See paper appendix Network Architecture)
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
@@ -135,6 +136,7 @@ class DeepSeaConfig(BaseConfig):
                 self.resnet_fc_reward_layers,
                 self.resnet_fc_value_layers,
                 self.resnet_fc_policy_layers,
+                self.resnet_fc_rnd_layers,
                 self.reward_support.size,
                 self.value_support.size,
                 self.downsample,
@@ -150,7 +152,9 @@ class DeepSeaConfig(BaseConfig):
                 state_norm=self.state_norm,
                 ensemble_size=self.ensemble_size,
                 use_network_prior=self.use_network_prior,
-                prior_scale=self.prior_scale
+                prior_scale=self.prior_scale,
+                uncertainty_type=self.uncertainty_architecture_type,
+                rnd_scale=self.rnd_scale,
             )
         else:
             return EfficientZeroNet(
@@ -176,7 +180,8 @@ class DeepSeaConfig(BaseConfig):
                 pred_hid=self.pred_hid,
                 pred_out=self.pred_out,
                 init_zero=self.init_zero,
-                state_norm=self.state_norm)
+                state_norm=self.state_norm,
+            )
 
     def new_game(self, seed=None, save_video=False, save_path=None, video_callable=None, uid=None, test=False,
                  final_test=False):
@@ -225,5 +230,8 @@ class DeepSeaConfig(BaseConfig):
     # TODO:
     def ube_loss(self, prediction, target):
         return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
+
+    def rnd_loss(self, prediction, target):
+        return torch.nn.functional.mse_loss(prediction, target, reduction='none')
 
 game_config = DeepSeaConfig()

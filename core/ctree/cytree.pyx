@@ -66,6 +66,10 @@ cdef class Roots:
     def get_distributions(self):
         return self.roots[0].get_distributions()
 
+    # MuExplore: get the uncertainties of the children of each node in roots
+    def get_roots_children_uncertainties(self, discount):
+        return self.roots[0].get_roots_children_uncertainties(discount)
+
     def get_values_uncertainty(self):
         return self.roots[0].get_values_uncertainty()
 

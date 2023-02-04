@@ -296,6 +296,18 @@ namespace tree{
         return distribution;
     }
 
+    //MuExplore
+    std::vector<float> CNode::get_children_uncertainties(float discount){
+        std::vector<float> children_uncertainty;
+        if(this->expanded()){
+            for(int a = 0; a < this->action_num; ++a){
+                CNode* child = this->get_child(a);
+                children_uncertainty.push_back(child->value_prefix_uncertainty + discount * discount * child->value_uncertainty());
+            }
+        }
+        return children_uncertainty;
+    }
+
     CNode* CNode::get_child(int action){
         int index = this->children_index[action];
         return &((*(this->ptr_node_pool))[index]);
@@ -408,6 +420,17 @@ namespace tree{
             distributions.push_back(this->roots[i].get_children_distribution());
         }
         return distributions;
+    }
+
+    //MuExplore
+    std::vector<std::vector<float>> CRoots::get_roots_children_uncertainties(float discount){
+        std::vector<std::vector<float>> children_uncertainties;
+        children_uncertainties.reserve(this->root_num);
+
+        for(int i = 0; i < this->root_num; ++i){
+            children_uncertainties.push_back(this->roots[i].get_children_uncertainties(discount));
+        }
+        return children_uncertainties;
     }
 
     std::vector<float> CRoots::get_values(){

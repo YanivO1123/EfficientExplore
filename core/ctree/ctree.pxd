@@ -58,6 +58,8 @@ cdef extern from "cnode.h" namespace "tree":
         float value_uncertainty()
         vector[int] get_trajectory()
         vector[int] get_children_distribution()
+        #MuExplore: get value uncertainty of children of node
+        vector[float] get_children_uncertainties(float discount)
         CNode* get_child(int action)
 
     cdef cppclass CRoots:
@@ -75,6 +77,8 @@ cdef extern from "cnode.h" namespace "tree":
         void clear()
         vector[vector[int]] get_trajectories()
         vector[vector[int]] get_distributions()
+        # MuExplore: get the uncertainties of the children of each node in roots
+        vector[vector[float]] get_roots_children_uncertainties(float discount)
         vector[float] get_values()
         vector[float] get_values_uncertainty()
 

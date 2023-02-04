@@ -283,8 +283,8 @@ class DataWorker(object):
                     # stack obs for model inference
                     stack_obs = [game_history.step_obs() for game_history in game_histories]
                     if self.config.use_visitation_counter and self.visitation_counter is not None:
-                        # Take the last of observation of stacked obs, from shape (num_envs, stack_obs, h, w)
-                        # to shape (num_envs, h, w)
+                        # Take the last of observation of stacked obs from shape (num_envs, h, w)
+                        # to shape (num_envs, 2)
                         initial_observations_for_counter = self.visitation_counter.from_one_hot_state_to_indexes(np.array(stack_obs, dtype=np.uint8)[:,-1,:,:])
                     if self.config.image_based:
                         stack_obs = prepare_observation_lst(stack_obs)
@@ -342,19 +342,60 @@ class DataWorker(object):
                         deterministic = False
                         if start_training:
                             distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
-                        elif 'deep_sea' in self.config.env_name:    # We don't want random actions in deep_sea
-                            distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
-                            deterministic = True
                         else:
                             # before starting training, use random policy
                             value, temperature, env = roots_values[i], _temperature[i], envs[i]
                             distributions = np.ones(self.config.action_space_size)
+
+                        if 'deep_sea' in self.config.env_name:    # We don't want random actions in deep_sea
+                            distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
+                            deterministic = True
 
                         action, visit_entropy = select_action(distributions, temperature=temperature, deterministic=deterministic)
                         # MuExplore: Add state-action to visitation counter
                         if self.config.use_visitation_counter and i > 0: # this will show ONLY what the exploratory episodes are doing, for debugging
                             # Take the last observation that was stored, and the current action
                             self.visitation_counter.observe(game_histories[i].obs_history[-1], action)
+
+                        # MuExplore debugging: do the uncertainty and root visitations agree?
+                        if i > 0 and self.config.mu_explore and 'deep_sea' in self.config.env_name \
+                                and self.config.plan_with_fake_visit_counter and total_transitions > self.config.start_transitions:
+                            row, column = initial_observations_for_counter[i]
+                            action_right = self.visitation_counter.identify_action_right(row, column)
+                            children_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)[i]
+                            # If everything was correct except action selection, print
+                            if row == column and action_right != action:
+                                print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
+                                      f"In env {i}, fake uncertainty, action selection is incorrect. \n "
+                                      f"Action right is {action_right} and action chosen in {action} \n"
+                                      f"State is {initial_observations_for_counter[i]} \n"
+                                      f"Uncertainties are: {children_uncertainties} \n"
+                                      f"Visitations counting are: {distributions} \n"
+                                      f"Value is: {value} \n"
+                                      f"deterministic is: {deterministic} \n"
+                                      f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
+                                      , flush=True)
+                            # If action right has LESS uncertainty than action left, and state is along the diagonal, print visitations, uncertainties and values
+                            if row == column and children_uncertainties[action_right] <= children_uncertainties[1 - action_right]:
+                                print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
+                                      f"In env {i}, fake uncertainty, MCTS uncertainty is incorrect. \n "
+                                      f"Action right is {action_right} \n"
+                                      f"State is {initial_observations_for_counter[i]} \n"
+                                      f"Uncertainties are: {children_uncertainties} \n"
+                                      f"Visitations counting are: {distributions} \n"
+                                      f"Value is: {value} \n"
+                                      f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
+                                      , flush=True)
+                            # If visitations right are LESS than visitations left and state is along the diagonal, print every
+                            if row == column and np.argmax(distributions) != np.argmax(children_uncertainties):
+                                print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% \n"
+                                      f"In env {i}, visitation counting do not agree with uncertainty max. \n "
+                                      f"Action right is {action_right} \n"
+                                      f"Uncertainties are: {children_uncertainties} \n"
+                                      f"Visitations counting are: {distributions} \n"
+                                      f"Value is: {value} \n"
+                                      f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% \n"
+                                      , flush=True)
 
                         obs, ori_reward, done, info = env.step(action)
 
@@ -429,7 +470,7 @@ class DataWorker(object):
                                   f"{value_unc_sum / (total_transitions * 3 / 4) } \n"
                                   , flush=True)
 
-                    if 'deep_sea' in self.config.env_name and (total_transitions - self.config.p_mcts_num) % 20 == 0: # % (self.config.test_interval)
+                    if 'deep_sea' in self.config.env_name and self.config.use_visitation_counter and (total_transitions - self.config.p_mcts_num) % 20 == 0: # % (self.config.test_interval)
                         print(f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
                               f"Printing the state-action visitation counter at the last row: \n"
                               f"{self.visitation_counter.sa_counts[-1, :, :]} \n"

@@ -75,6 +75,7 @@ class BaseConfig(object):
                  reward_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
                  mu_explore: bool = False,
                  use_uncertainty_architecture: bool = False,
+                 uncertainty_architecture_type: str = 'ensemble',
                  use_visitation_counter: bool = False,
                  plan_with_visitation_counter: bool = False,
                  ensemble_size: int = 5,
@@ -208,6 +209,9 @@ class BaseConfig(object):
         use_uncertainty_architecture: bool
             a bool whether to init a regular EffZero network, or a network with ensembles over value prefix and
             value predictions
+        uncertainty_architecture_type: str
+            Options: 'ensemble', 'rnd', 'rnd_ube', 'ensemble_ube' defaults to ensemble
+            Decides the uncertainty type that will be used by the agent
         use_visitation_counter: bool
             Only implemented for deep_sea. The visitation counter counts state-action visitations and uses them as a
             measure of epistemic uncertainty, as so: 1 / (epsilon + state_action_visit_count)
@@ -329,9 +333,15 @@ class BaseConfig(object):
         ## uncertainty
         # architecture
         self.use_uncertainty_architecture = use_uncertainty_architecture
+        self.uncertainty_architecture_type = uncertainty_architecture_type
+
+        # ensemble
         self.ensemble_size = ensemble_size
         self.use_network_prior = use_network_prior
         self.prior_scale = prior_scale
+
+        # rnd
+        self.rnd_scale = 2
 
         # exploration
         self.mu_explore = mu_explore
@@ -471,6 +481,10 @@ class BaseConfig(object):
             if args.case == 'deep_sea':
                 self.ensemble_size = 10
                 self.start_transitions = max(self.start_transitions, self.batch_size)
+                self.proj_hid = 1024
+                self.proj_out = 1024
+                self.pred_hid = 512
+                self.pred_out = 1024
 
         if args.cluster and args.case == 'atari':
             # Base network arch.
@@ -494,6 +508,7 @@ class BaseConfig(object):
                 self.plan_with_fake_visit_counter = args.plan_w_fake_visit_counter
                 self.plan_with_state_visits = args.plan_w_state_visits
         self.use_uncertainty_architecture = args.uncertainty_architecture
+        self.uncertainty_architecture_type = args.uncertainty_architecture_type
         # MuExplore is only applicable with some uncertainty mechanism
         assert args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter) or not args.mu_explore
         self.mu_explore = args.mu_explore and (self.use_uncertainty_architecture or self.use_visitation_counter)

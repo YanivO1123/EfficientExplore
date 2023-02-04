@@ -44,6 +44,12 @@ class CountUncertainty:
         row_index, column_index = self.observation_space_shape[0] - 1, self.observation_space_shape[1] - 1
         return row_index, column_index, action_right
 
+    def identify_action_right(self, row, column):
+        """
+            For a state in form row / column, returns which action is right (0 or 1)
+        """
+        return self.planning_env._action_mapping[row, column]
+
     @staticmethod
     def from_one_hot_state_to_indexes(state):
         """

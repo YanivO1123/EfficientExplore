@@ -606,6 +606,7 @@ class EfficientExploreNet(EfficientZeroNet):
                  fc_reward_layers,
                  fc_value_layers,
                  fc_policy_layers,
+                 fc_rnd_layers,
                  reward_support_size,
                  value_support_size,
                  downsample,
@@ -619,10 +620,11 @@ class EfficientExploreNet(EfficientZeroNet):
                  pred_out=256,
                  init_zero=False,
                  state_norm=False,
-                 use_ube=False,
                  ensemble_size=2,
                  use_network_prior=True,
                  prior_scale=10,
+                 uncertainty_type='ensemble',
+                 rnd_scale=1,
                  ):
         super(EfficientExploreNet, self).__init__(
             observation_shape,
@@ -648,6 +650,8 @@ class EfficientExploreNet(EfficientZeroNet):
             pred_out=pred_out,
             init_zero=init_zero,
             state_norm=state_norm)
+
+        self.uncertainty_type = uncertainty_type
 
         block_output_size_reward = (
             (
@@ -679,43 +683,59 @@ class EfficientExploreNet(EfficientZeroNet):
             else (reduced_channels_policy * observation_shape[1] * observation_shape[2])
         )
 
-        self.dynamics_network = EnsembleDynamicsNetwork(
-            num_blocks,
-            num_channels + 1,
-            reduced_channels_reward,
-            fc_reward_layers,
-            reward_support_size,
-            block_output_size_reward,
-            lstm_hidden_size=lstm_hidden_size,
-            momentum=bn_mt,
-            init_zero=self.init_zero,
-            ensemble_size=ensemble_size,
-            use_network_prior=use_network_prior,
-            prior_scale=prior_scale,
-        )
+        if self.uncertainty_type == 'ensemble' or self.uncertainty_type == 'ensemble_ube':
+            self.dynamics_network = EnsembleDynamicsNetwork(
+                num_blocks,
+                num_channels + 1,
+                reduced_channels_reward,
+                fc_reward_layers,
+                reward_support_size,
+                block_output_size_reward,
+                lstm_hidden_size=lstm_hidden_size,
+                momentum=bn_mt,
+                init_zero=self.init_zero,
+                ensemble_size=ensemble_size,
+                use_network_prior=use_network_prior,
+                prior_scale=prior_scale,
+            )
 
-        self.prediction_network = EnsemblePredictionNetwork(
-            action_space_size,
-            num_blocks,
-            num_channels,
-            reduced_channels_value,
-            reduced_channels_policy,
-            fc_value_layers,
-            fc_policy_layers,
-            value_support_size,
-            block_output_size_value,
-            block_output_size_policy,
-            momentum=bn_mt,
-            init_zero=self.init_zero,
-            ensemble_size=ensemble_size,
-            use_network_prior=use_network_prior,
-            prior_scale=prior_scale,
-        )
+            self.prediction_network = EnsemblePredictionNetwork(
+                action_space_size,
+                num_blocks,
+                num_channels,
+                reduced_channels_value,
+                reduced_channels_policy,
+                fc_value_layers,
+                fc_policy_layers,
+                value_support_size,
+                block_output_size_value,
+                block_output_size_policy,
+                momentum=bn_mt,
+                init_zero=self.init_zero,
+                ensemble_size=ensemble_size,
+                use_network_prior=use_network_prior,
+                prior_scale=prior_scale,
+            )
+        elif self.uncertainty_type == 'rnd' or self.uncertainty_type == 'rnd_ube':
+            self.input_size_rnd = (
+                (
+                        num_channels
+                        * math.ceil(observation_shape[1] / 16)
+                        * math.ceil(observation_shape[2] / 16)
+                )
+                if downsample
+                else (num_channels * observation_shape[1] * observation_shape[2])
+            )
+            self.rnd_scale = rnd_scale
+            # It's important that the RND nets are NOT initiated with zero
+            self.rnd_network = mlp(self.input_size_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False, momentum=bn_mt)
+            self.rnd_target_network = mlp(self.input_size_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False, momentum=bn_mt)
 
-        #TODO: Add UBE network
-        self.use_ube = use_ube
-        if self.use_ube:
-            self.ube_network = NotImplementedError
+        if self.uncertainty_type == 'ensemble_ube' or self.uncertainty_type == 'rnd_ube':
+            self.use_ube = True
+            self.ube_network = None
+            raise NotImplementedError
+
 
     #TODO: Complete this function, and move it because it probably doesnt belong here.
     def ensemble_prediction_to_variance(self, logits):
@@ -745,6 +765,11 @@ class EfficientExploreNet(EfficientZeroNet):
         # I need to decide if UBE takes encoded_state or encoded_state and action
         return NotImplementedError
 
+    def compute_rnd_uncertainty(self, state):
+        state = state.view(-1, self.input_size_rnd)
+        return self.rnd_scale * torch.nn.functional.mse_loss(self.rnd_network(state),
+                                                             self.rnd_target_network(state),
+                                                             reduction='none')
 
 class EnsembleDynamicsNetwork(DynamicsNetwork):
     def __init__(

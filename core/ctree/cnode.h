@@ -54,6 +54,8 @@ namespace tree {
 
             std::vector<int> get_trajectory();
             std::vector<int> get_children_distribution();
+            //MuExplore get the uncertainty of children
+            std::vector<float> get_children_uncertainties(float discount);
             CNode* get_child(int action);
     };
 
@@ -80,7 +82,7 @@ namespace tree {
             std::vector<float> get_values();
             //MuExplore: Returns the value-uncertainty of the nodes
             std::vector<float> get_values_uncertainty();
-
+            std::vector<std::vector<float>> get_roots_children_uncertainties(float discount);
     };
 
     class CSearchResults{
