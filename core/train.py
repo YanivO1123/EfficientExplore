@@ -470,6 +470,9 @@ def train(config, summary_writer, model_path=None):
           f"Beta value = {config.beta} \n"
           f"Disable policy usage in exploration: {config.disable_policy_in_exploration} \n"
           f"Using visitation counter: {config.use_visitation_counter} \n"
+          f"Planning with visitation counter: {config.plan_with_visitation_counter} \n"
+          f"Using state-visits (True), or state-action visits (False): {config.plan_with_state_visits} \n"
+          f"Using FAKE visitation counter: {config.plan_with_fake_visit_counter} \n"
           f"Starting workers", flush=True)
 
     storage = SharedStorage.remote(model, target_model)
