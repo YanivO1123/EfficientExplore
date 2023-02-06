@@ -316,9 +316,9 @@ class BatchWorker_CPU(object):
         else:
             policy_non_re_context = None
 
-        # TODO: Compute ube context with self._prepare_ube_context - if even necessary
+        #TODO: Compute ube context with self._prepare_ube_context - if even necessary
 
-        # TODO: Change context structure to pass UBE context
+        #TODO: Change context structure to pass UBE context
         countext = reward_value_context, policy_re_context, policy_non_re_context, inputs_batch, weights
         self.mcts_storage.push(countext)
 
@@ -504,7 +504,7 @@ class BatchWorker_GPU(object):
         device = self.config.device
         batch_size = len(value_obs_lst)
 
-        batch_values, batch_value_prefixs = [], []
+        batch_values, batch_value_prefixs, batch_value_target_types = [], [], []
         with torch.no_grad():
             value_obs_lst = prepare_observation_lst(value_obs_lst)
             zero_step_value_obs_lst = prepare_observation_lst(zero_step_value_obs_lst)
@@ -577,13 +577,12 @@ class BatchWorker_GPU(object):
                 # traj_len = len(game)
                 target_values = []
                 target_value_prefixs = []
+                # Logs whether this target is n-step EXPLORATORY target (1) or any other target - 0-step exploratory or n-step regular (0)
+                targets_values_types = []
 
                 horizon_id = 0
                 value_prefix = 0.0
                 base_index = state_index
-
-                # TODO: if exploration_episode, do value target = max(local, discounted)
-                # TODO: get the current-state values to compare
 
                 for current_index in range(state_index, state_index + self.config.num_unroll_steps + 1):
                     bootstrap_index = current_index + td_steps_lst[value_index]
@@ -603,6 +602,11 @@ class BatchWorker_GPU(object):
                             target_values.append(value_lst_zero_step[value_index])
                         else:
                             target_values.append(value_lst[value_index])
+                        # If this was an n-step EXPLORATORY target, append 1
+                        if value_lst[value_index] > value_lst_zero_step[value_index] and exploration_episode:
+                            targets_values_types.append(1)  # this was an n-step EXPLORATORY target
+                        else:
+                            targets_values_types.append(0)  # this was any other kind of target
                         # Since the horizon is small and the discount is close to 1.
                         # Compute the reward sum to approximate the value prefix for simplification
                         value_prefix += reward_lst[current_index]  # * config.discount ** (current_index - base_index)
@@ -610,14 +614,89 @@ class BatchWorker_GPU(object):
                     else:
                         target_values.append(0)
                         target_value_prefixs.append(value_prefix)
+                        targets_values_types.append(0)
                     value_index += 1
 
                 batch_value_prefixs.append(target_value_prefixs)
                 batch_values.append(target_values)
+                batch_value_target_types.append(targets_values_types)
 
         batch_value_prefixs = np.asarray(batch_value_prefixs)
         batch_values = np.asarray(batch_values)
-        return batch_value_prefixs, batch_values
+        batch_value_target_types = np.asarray(batch_value_target_types)
+        return batch_value_prefixs, batch_values, batch_value_target_types
+
+    def _prepare_policy_re_max_targets(self, policy_re_context, max_targets):
+        """
+            prepare policy targets from the reanalyzed context of policies for max-policy targets
+            Max policy targets are computed as follows:
+            If exploration episode, and value target is an n-step target, DO NOT reanalyze
+        """
+        batch_policies_re = []
+        if policy_re_context is None:
+            return batch_policies_re
+
+        policy_obs_lst, policy_mask, state_index_lst, indices, child_visits, traj_lens = policy_re_context
+        policy_obs_lst = ray.get(policy_obs_lst)
+        batch_size = len(policy_obs_lst)
+        device = self.config.device
+
+        with torch.no_grad():
+            policy_obs_lst = prepare_observation_lst(policy_obs_lst)
+            # split a full batch into slices of mini_infer_size: to save the GPU memory for more GPU actors
+            m_batch = self.config.mini_infer_size
+            slices = np.ceil(batch_size / m_batch).astype(np.int_)
+            network_output = []
+            for i in range(slices):
+                beg_index = m_batch * i
+                end_index = m_batch * (i + 1)
+
+                m_obs = torch.from_numpy(policy_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                if self.config.amp_type == 'torch_amp':
+                    with autocast():
+                        m_output = self.model.initial_inference(m_obs)
+                else:
+                    m_output = self.model.initial_inference(m_obs)
+                network_output.append(m_output)
+
+            _, value_prefix_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_output(network_output)
+            value_prefix_pool = value_prefix_pool.squeeze().tolist()
+            policy_logits_pool = policy_logits_pool.tolist()
+
+            roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations)
+            noises = [np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(np.float32).tolist() for _ in range(batch_size)]
+            roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool, policy_logits_pool)
+            # do MCTS for a new policy with the recent target model
+            MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots)
+
+            roots_distributions = roots.get_distributions()
+            policy_index = 0
+
+            for enumerate_index, (state_index, game_idx) in enumerate(zip(state_index_lst, indices)):
+                target_policies = []
+
+                for current_index in range(state_index, state_index + self.config.num_unroll_steps + 1):
+                    distributions = roots_distributions[policy_index]
+
+                    if policy_mask[policy_index] == 0:
+                        target_policies.append([0 for _ in range(self.config.action_space_size)])
+                    else:
+                        # game.store_search_stats(distributions, value, current_index)
+                        #TODO: Verify the indexing of max_target
+                        # If this was an n-step target AND an exploration episode, DO NOT use the reanlyzed policy target
+                        if max_targets[enumerate_index][current_index - state_index] == 1:
+                            target_policies.append(child_visits[enumerate_index][current_index])
+                        else:
+                            sum_visits = sum(distributions)
+                            policy = [visit_count / sum_visits for visit_count in distributions]
+                            target_policies.append(policy)
+
+                    policy_index += 1
+
+                batch_policies_re.append(target_policies)
+
+        batch_policies_re = np.asarray(batch_policies_re)
+        return batch_policies_re
 
     def _prepare_policy_re(self, policy_re_context):
         """prepare policy targets from the reanalyzed context of policies
@@ -723,11 +802,20 @@ class BatchWorker_GPU(object):
 
             # target reward, value
             if self.config.use_max_value_targets:
-                batch_value_prefixs, batch_values = self._prepare_reward_value_max_targets(reward_value_context)
+                batch_value_prefixs, batch_values, max_targets = self._prepare_reward_value_max_targets(reward_value_context)
             else:
                 batch_value_prefixs, batch_values = self._prepare_reward_value(reward_value_context)
+
             # target policy
-            batch_policies_re = self._prepare_policy_re(policy_re_context)
+            #MuExplore: If max policy targets, compute whether to reanalyze or not
+            if self.config.use_max_policy_targets:
+                # Identify which part of the batch is marked for reanalyses and which not
+                re_num = int(self.config.batch_size * self.config.revisit_policy_search_rate)
+                batch_policies_re = self._prepare_policy_re_max_targets(policy_re_context, max_targets[:re_num])
+            else:
+                batch_policies_re = self._prepare_policy_re(policy_re_context)
+
+            # batch_policies_re = self._prepare_policy_re(policy_re_context)
             batch_policies_non_re = self._prepare_policy_non_re(policy_non_re_context)
             batch_policies = np.concatenate([batch_policies_re, batch_policies_non_re])
 

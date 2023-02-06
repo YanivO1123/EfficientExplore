@@ -85,6 +85,7 @@ class BaseConfig(object):
                  disable_policy_in_exploration: bool = True,
                  training_ratio: float = 1,
                  use_max_value_targets: bool = False,
+                 use_max_policy_targets: bool = False,
                  ):
         """Base Config for EfficietnZero
         Parameters
@@ -234,7 +235,10 @@ class BaseConfig(object):
             a float >= 1, guarantees that ratio: % trained steps / % transitions >= training_ratio
             The purpose is to encourage / require / enable the agent to train much more than interact.
         use_max_value_targets: bool
-            If True, uses max_targets (see paper, learning from exploratory decisions). Otherwise, does standard
+            If True, uses max_value_targets (see paper, learning from exploratory decisions). Otherwise, does standard
+            EfficientZero.
+        use_max_policy_targets: bool
+            If True, uses max_policy_targets from max_value_targets (see paper, learning from exploratory decisions). Otherwise, does standard
             EfficientZero.
         """
         # Self-Play
@@ -359,6 +363,7 @@ class BaseConfig(object):
 
         # Target types in exploration
         self.use_max_value_targets = use_max_value_targets
+        self.use_max_policy_targets = use_max_policy_targets
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -486,13 +491,13 @@ class BaseConfig(object):
                 self.pred_hid = 512
                 self.pred_out = 1024
 
-        if args.cluster and args.case == 'atari':
-            # Base network arch.
-            self.lstm_hidden_size = 512
-            self.proj_hid = 1024
-            self.proj_out = 1024
-            self.pred_hid = 512
-            self.pred_out = 1024
+            if args.case == 'atari':
+                # Base network arch.
+                self.lstm_hidden_size = 512
+                self.proj_hid = 1024
+                self.proj_out = 1024
+                self.pred_hid = 512
+                self.pred_out = 1024
 
         # Setup MuExplore params from command line
         if args.beta is not None and args.beta >= 0:
@@ -503,19 +508,23 @@ class BaseConfig(object):
         if args.case == 'deep_sea':
             self.use_visitation_counter = args.visit_counter
             # only use visit_counter in planning when it's enabled
-            self.plan_with_visitation_counter = args.p_w_vis_counter and args.visit_counter
+            self.plan_with_visitation_counter = args.p_w_vis_counter and self.use_visitation_counter
             if self.plan_with_visitation_counter:
                 self.plan_with_fake_visit_counter = args.plan_w_fake_visit_counter
                 self.plan_with_state_visits = args.plan_w_state_visits
         self.use_uncertainty_architecture = args.uncertainty_architecture
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
         # MuExplore is only applicable with some uncertainty mechanism
-        assert args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter) or not args.mu_explore
+        assert (args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter)) or (not args.mu_explore)
         self.mu_explore = args.mu_explore and (self.use_uncertainty_architecture or self.use_visitation_counter)
         self.disable_policy_in_exploration = args.disable_policy_in_exploration
         self.root_exploration_fraction = args.exploration_fraction
         if args.use_max_value_targets and self.mu_explore:
             self.use_max_value_targets = args.use_max_value_targets
+            self.use_max_policy_targets = self.use_max_value_targets and args.use_max_value_targets
+        else:
+            self.use_max_value_targets = False
+            self.use_max_policy_targets = False
         # Else, uses use_max_value_targets from the config
 
         if not self.do_consistency:

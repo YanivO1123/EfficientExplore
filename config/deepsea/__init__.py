@@ -47,7 +47,7 @@ class DeepSeaConfig(BaseConfig):
             lr_decay_steps=50000,
             auto_td_steps_ratio=0.1, # 0.3,
             # replay window
-            start_transitions=500,
+            start_transitions=500, # 32
             total_transitions=100 * 1000,
             transition_num=1,
             do_consistency=True,

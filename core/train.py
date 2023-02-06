@@ -463,6 +463,7 @@ def train(config, summary_writer, model_path=None):
     print(f"MuExplore hyperparameters configuration: \n"
           f"Uncertainty-architecture params: \n"
           f"Use uncertainty architecture: {config.use_uncertainty_architecture} \n"
+          f"Type of uncertainty architecture: {config.uncertainty_architecture_type} \n"
           f"Ensemble size: {config.ensemble_size} \n"
           f"Use network prior: {config.use_network_prior} \n"
           f"Exploration params: \n"
@@ -473,6 +474,9 @@ def train(config, summary_writer, model_path=None):
           f"Planning with visitation counter: {config.plan_with_visitation_counter} \n"
           f"Using state-visits (True), or state-action visits (False): {config.plan_with_state_visits} \n"
           f"Using FAKE visitation counter: {config.plan_with_fake_visit_counter} \n"
+          f"Exploration-targets params: \n"
+          f"use_max_value_targets = {config.use_max_value_targets} \n"
+          f"use_max_policy_targets = {config.use_max_policy_targets} \n"
           f"Starting workers", flush=True)
 
     storage = SharedStorage.remote(model, target_model)
