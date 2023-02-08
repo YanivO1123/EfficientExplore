@@ -56,6 +56,7 @@ namespace tree {
             std::vector<int> get_children_distribution();
             //MuExplore get the uncertainty of children
             std::vector<float> get_children_uncertainties(float discount);
+            std::vector<float> get_children_values(float discount);
             CNode* get_child(int action);
     };
 
@@ -68,11 +69,11 @@ namespace tree {
             CRoots();
             CRoots(int root_num, int action_num, int pool_size);
             //MuExplore: Setup a CRoots that are exploratory (mu_explore = true, beta = beta)
-            CRoots(int root_num, int action_num, int pool_size, float beta);
+            CRoots(int root_num, int action_num, int pool_size, float beta, int num_exploratory);
             ~CRoots();
 
             //MuExplore: prepare_explore prepares roots for exploration episodes
-            void prepare_explore(float root_exploration_fraction, const std::vector<std::vector<float>> &noises, const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies, const std::vector<float> &value_prefixs_uncertainty, float beta);
+            void prepare_explore(float root_exploration_fraction, const std::vector<std::vector<float>> &noises, const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies, const std::vector<float> &value_prefixs_uncertainty, float beta, int num_exploratory);
 
             void prepare(float root_exploration_fraction, const std::vector<std::vector<float>> &noises, const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies);
             void prepare_no_noise(const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies);
@@ -83,6 +84,7 @@ namespace tree {
             //MuExplore: Returns the value-uncertainty of the nodes
             std::vector<float> get_values_uncertainty();
             std::vector<std::vector<float>> get_roots_children_uncertainties(float discount);
+            std::vector<std::vector<float>> get_roots_children_values(float discount);
     };
 
     class CSearchResults{
@@ -107,7 +109,7 @@ namespace tree {
     void cbatch_traverse(CRoots *roots, int pb_c_base, float pb_c_init, float discount, tools::CMinMaxStatsList *min_max_stats_lst, CSearchResults &results);
     //MuExplore:
     // A cbatch_back_propagate that also also backpropagates value_uncertainty
-    void cuncertainty_batch_back_propagate(int hidden_state_index_x, float discount, const std::vector<float> &value_prefixs, const std::vector<float> &values, const std::vector<std::vector<float>> &policies, tools::CMinMaxStatsList *min_max_stats_lst, CSearchResults &results, std::vector<int> is_reset_lst, const std::vector<float> &value_prefixs_uncertainty, const std::vector<float> &values_uncertainty);
+    void cuncertainty_batch_back_propagate(int hidden_state_index_x, float discount, const std::vector<float> &value_prefixs, const std::vector<float> &values, const std::vector<std::vector<float>> &policies, tools::CMinMaxStatsList *min_max_stats_lst, CSearchResults &results, std::vector<int> is_reset_lst, const std::vector<float> &value_prefixs_uncertainty, const std::vector<float> &values_uncertainty, int num_exploratory);
     // A cback_propagate that also backpropagates value_uncertainty
     void cback_propagate(std::vector<CNode*> &search_path, tools::CMinMaxStats &min_max_stats, int to_play, float value, float discount, float value_uncertainty);
     // A cselect_child function that uses mean_q_uncertainty

@@ -303,9 +303,9 @@ def select_action(visit_counts, temperature=1, deterministic=True):
     total_count = sum(action_probs)
     action_probs = [x / total_count for x in action_probs]
     if deterministic:
-        # best_actions = np.argwhere(visit_counts == np.amax(visit_counts)).flatten()
-        # action_pos = np.random.choice(best_actions)
-        action_pos = np.argmax([v for v in visit_counts])
+        best_actions = np.argwhere(visit_counts == np.amax(visit_counts)).flatten()
+        action_pos = np.random.choice(best_actions)
+        # action_pos = np.argmax([v for v in visit_counts])
     else:
         action_pos = np.random.choice(len(visit_counts), p=action_probs)
 

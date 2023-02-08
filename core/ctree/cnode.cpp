@@ -308,6 +308,17 @@ namespace tree{
         return children_uncertainty;
     }
 
+    std::vector<float> CNode::get_children_values(float discount){
+        std::vector<float> children_values;
+        if(this->expanded()){
+            for(int a = 0; a < this->action_num; ++a){
+                CNode* child = this->get_child(a);
+                children_values.push_back(child->value_prefix + discount * child->value());
+            }
+        }
+        return children_values;
+    }
+
     CNode* CNode::get_child(int action){
         int index = this->children_index[action];
         return &((*(this->ptr_node_pool))[index]);
@@ -338,7 +349,8 @@ namespace tree{
     }
 
     //MuExplore: Setup a CRoots that are exploratory (mu_explore = true, beta = beta)
-    CRoots::CRoots(int root_num, int action_num, int pool_size, float beta){
+    CRoots::CRoots(int root_num, int action_num, int pool_size, float beta, int num_exploratory){
+        int num_exploit = root_num - num_exploratory;
         this->root_num = root_num;
         this->action_num = action_num;
         this->pool_size = pool_size;
@@ -349,7 +361,7 @@ namespace tree{
         for(int i = 0; i < root_num; ++i){
             this->node_pools.push_back(std::vector<CNode>());
             this->node_pools[i].reserve(pool_size);
-            if (i == 0) {   // The first root is a regular root
+            if (i < num_exploit) {   // The first root is a regular root
                 this->roots.push_back(CNode(0, action_num, &this->node_pools[i]));
             }
             else {  // The other roots are exploratory roots
@@ -363,10 +375,11 @@ namespace tree{
 
 
     //MuExplore: prepare_explore prepares roots for exploration episodes
-    void CRoots::prepare_explore(float root_exploration_fraction, const std::vector<std::vector<float>> &noises, const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies, const std::vector<float> &value_prefixs_uncertainty, float beta){
+    void CRoots::prepare_explore(float root_exploration_fraction, const std::vector<std::vector<float>> &noises, const std::vector<float> &value_prefixs, const std::vector<std::vector<float>> &policies, const std::vector<float> &value_prefixs_uncertainty, float beta, int num_exploratory){
+        int num_exploit = this->root_num - num_exploratory;
         for(int i = 0; i < this->root_num; ++i){
-            // The first root is standard
-            if (i == 0) {
+            // The first num_exploit roots are standard
+            if (i < num_exploit) {
                 this->roots[i].expand(0, 0, i, value_prefixs[i], policies[i]);
             }
             // The other roots are exploratory
@@ -431,6 +444,16 @@ namespace tree{
             children_uncertainties.push_back(this->roots[i].get_children_uncertainties(discount));
         }
         return children_uncertainties;
+    }
+
+    std::vector<std::vector<float>> CRoots::get_roots_children_values(float discount){
+        std::vector<std::vector<float>> children_values;
+        children_values.reserve(this->root_num);
+
+        for(int i = 0; i < this->root_num; ++i){
+            children_values.push_back(this->roots[i].get_children_values(discount));
+        }
+        return children_values;
     }
 
     std::vector<float> CRoots::get_values(){
@@ -564,10 +587,11 @@ namespace tree{
 
 
     //MuExplore: a cbatch_back_propagate function that backprops uncertainty
-    void cuncertainty_batch_back_propagate(int hidden_state_index_x, float discount, const std::vector<float> &value_prefixs, const std::vector<float> &values, const std::vector<std::vector<float>> &policies, tools::CMinMaxStatsList *min_max_stats_lst, CSearchResults &results, std::vector<int> is_reset_lst, const std::vector<float> &value_prefixs_uncertainty, const std::vector<float> &values_uncertainty){
+    void cuncertainty_batch_back_propagate(int hidden_state_index_x, float discount, const std::vector<float> &value_prefixs, const std::vector<float> &values, const std::vector<std::vector<float>> &policies, tools::CMinMaxStatsList *min_max_stats_lst, CSearchResults &results, std::vector<int> is_reset_lst, const std::vector<float> &value_prefixs_uncertainty, const std::vector<float> &values_uncertainty, int num_exploratory){
+        int num_exploit = results.num - num_exploratory;
         for(int i = 0; i < results.num; ++i){
-            // The first root is a standard root, and should be backpropagated with the standard functions
-            if (i == 0) {
+            // The first num_exploit roots are standard roots, and should be backpropagated with the standard functions
+            if (i < num_exploit) {
                 results.nodes[i]->expand(0, hidden_state_index_x, i, value_prefixs[i], policies[i]);
                 // reset
                 results.nodes[i]->is_reset = is_reset_lst[i];

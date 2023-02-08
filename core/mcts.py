@@ -12,7 +12,7 @@ class MCTS(object):
     def __init__(self, config):
         self.config = config
 
-    def search(self, roots, model, hidden_state_roots, reward_hidden_roots):
+    def search(self, roots, model, hidden_state_roots, reward_hidden_roots, acting=False):
         """Do MCTS for the roots (a batch of root nodes in parallel). Parallel in model inference
         Parameters
         ----------
@@ -24,11 +24,14 @@ class MCTS(object):
             the hidden states of the roots
         reward_hidden_roots: list
             the value prefix hidden states in LSTM of the roots
+        acting: bool
+            Distinguishes between acting in the environment (True) and training (False)
         """
         with torch.no_grad():
             model.eval()
             # preparation
             num = roots.num
+            num_exploratory = self.config.number_of_exploratory_envs
             device = self.config.device
             pb_c_base, pb_c_init, discount = self.config.pb_c_base, self.config.pb_c_init, self.config.discount
             # the data storage of hidden states: storing the states of all the tree nodes
@@ -102,14 +105,14 @@ class MCTS(object):
                 hidden_state_index_x += 1
 
                 #MuExplore: Backprop. w. uncertainty
-                if self.config.mu_explore:
+                if self.config.mu_explore and acting:
                     if self.config.disable_policy_in_exploration:
                         len_logits = len(policy_logits_pool[0])
                         policy_logits_pool = [policy_logits_pool[0]] + [[1.0] * len_logits for _ in range(len(policy_logits_pool) - 1)]
                     tree.uncertainty_batch_back_propagate(hidden_state_index_x, discount,
                                               value_prefix_pool, value_pool, policy_logits_pool,
                                               min_max_stats_lst, results, is_reset_lst,
-                                              value_prefix_variance_pool, value_variance_pool)
+                                              value_prefix_variance_pool, value_variance_pool, num_exploratory)
                 else:
                     # backpropagation along the search path to update the attributes
                     tree.batch_back_propagate(hidden_state_index_x, discount,
@@ -140,6 +143,7 @@ class MCTS(object):
             model.eval()
             # preparation
             num = roots.num
+            num_exploratory = self.config.number_of_exploratory_envs
             device = self.config.device
             pb_c_base, pb_c_init, discount = self.config.pb_c_base, self.config.pb_c_init, self.config.discount
             # the data storage of hidden states: storing the states of all the tree nodes
@@ -246,7 +250,7 @@ class MCTS(object):
                     tree.uncertainty_batch_back_propagate(hidden_state_index_x, discount,
                                               value_prefix_pool, value_pool, policy_logits_pool,
                                               min_max_stats_lst, results, is_reset_lst,
-                                              value_prefix_variance_pool, value_variance_pool)
+                                              value_prefix_variance_pool, value_variance_pool, num_exploratory)
                 else:
                     # backpropagation along the search path to update the attributes
                     tree.batch_back_propagate(hidden_state_index_x, discount,

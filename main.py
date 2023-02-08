@@ -60,7 +60,7 @@ if __name__ == '__main__':
     parser.add_argument('--mu_explore', action='store_true', default=False,
                         help="Use MuExplore (exploratory MCTS), or not.")
     parser.add_argument('--uncertainty_architecture', action='store_true', default=False,
-                        help="Use uncertainty_architecture (ensemble), or not.")
+                        help="Use uncertainty_architecture, or not.")
     parser.add_argument('--disable_policy_in_exploration', action='store_true', default=False,
                         help="If using MuExplore, disable policy-prior node scores in MCTS search in exploration episodes. "
                              "If false, can be too policy-biased and not provide effective exploration.")
@@ -83,8 +83,11 @@ if __name__ == '__main__':
     parser.add_argument('--plan_w_state_visits', action='store_true', default=False,
                         help="If true uses state visits. Otherwise, will use state-action visits."
                              "Only relevant if uses p_w_vis_counter, ")
-    parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube'], default='rnd',
+    parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube'], default='ensemble',
                         help="It's used for switching between different domains(default: %(default)s)")
+    parser.add_argument('--number_of_exploratory_envs', type=int, default=None, help='If MuExplore, number of environments <= p_mcts_num that'
+                                                                                     'are exploratory')
+
 
 
     # Process arguments

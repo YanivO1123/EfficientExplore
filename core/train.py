@@ -19,6 +19,9 @@ from core.reanalyze_worker import BatchWorker_GPU, BatchWorker_CPU
 
 import core
 
+from core.visitation_counter import CountUncertainty
+import traceback
+
 
 def consist_loss_func(f1, f2):
     """Consistency loss function: similarity loss
@@ -43,7 +46,7 @@ def adjust_lr(config, optimizer, step_count):
     return lr
 
 
-def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result=False):
+def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result=False, step_count=None):
     """update models given a batch data
     Parameters
     ----------
@@ -61,6 +64,14 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     inputs_batch, targets_batch = batch
     obs_batch_ori, action_batch, mask_batch, indices, weights_lst, make_time = inputs_batch
     target_value_prefix, target_value, target_policy = targets_batch
+
+    # if 'deep_sea' in config.env_name and step_count % config.test_interval == 0:
+    #     try:
+    #         debug_train_deep_sea(obs_batch_ori, target_value, target_policy, mask_batch,
+    #                              config.seed, config.stacked_observations,
+    #                              config.batch_size, config.num_unroll_steps, step_count)
+    #     except:
+    #         traceback.print_exc()
 
     # [:, 0: config.stacked_observations * 3,:,:]
     # obs_batch_ori is the original observations in a batch
@@ -138,7 +149,8 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     consistency_loss = torch.zeros(batch_size, device=config.device)
 
     # Rnd loss:
-    if config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube':
+    if (config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube') \
+            and config.use_uncertainty_architecture:
         # flatten the state
         hidden_state_for_rnd = hidden_state.view(-1, model.input_size_rnd).float().detach()
         prediction = model.rnd_network(hidden_state_for_rnd)
@@ -417,10 +429,10 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             vis_result = False
 
         if config.amp_type == 'torch_amp':
-            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result)
+            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count)
             scaler = log_data[3]
         else:
-            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result)
+            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count)
 
         if step_count % config.log_interval == 0:
             _log(config, step_count, log_data[0:3], model, replay_buffer, lr, shared_storage, summary_writer, vis_result)
@@ -468,6 +480,7 @@ def train(config, summary_writer, model_path=None):
           f"Use network prior: {config.use_network_prior} \n"
           f"Exploration params: \n"
           f"Use MuExplore in MCTS: {config.mu_explore} \n"
+          f"Number of exploratory environments: {config.number_of_exploratory_envs} out of {config.p_mcts_num} envs total \n"
           f"Beta value = {config.beta} \n"
           f"Disable policy usage in exploration: {config.disable_policy_in_exploration} \n"
           f"Using visitation counter: {config.use_visitation_counter} \n"
@@ -477,7 +490,8 @@ def train(config, summary_writer, model_path=None):
           f"Exploration-targets params: \n"
           f"use_max_value_targets = {config.use_max_value_targets} \n"
           f"use_max_policy_targets = {config.use_max_policy_targets} \n"
-          f"Starting workers", flush=True)
+          f"Starting workers"
+          , flush=True)
 
     storage = SharedStorage.remote(model, target_model)
 
@@ -512,3 +526,36 @@ def train(config, summary_writer, model_path=None):
     print('Training over...', flush=True)
 
     return model, final_weights
+
+def debug_train_deep_sea(observations_batch, values_targets_batch, policy_targets_batch, mask_batch,
+                         action_mapping_seed, stacked_observations, batch_size, rollout_length, step_count):
+    # Process the observations if necessary
+    # observations_batch is of shape (batch_size, stacked_observations * unroll_size, h, w) [:, 0: config.stacked_observations * 3,:,:]
+    # observations_batch = observations_batch
+    visitation_counter = CountUncertainty(name='deep_sea/0', num_envs=1, mapping_seed=action_mapping_seed)
+    # Search the batch for all states
+    diagonal_observation_indexes = []
+    diagonal_observations = []
+    # print(f"=========================================================================== \n"
+    #       f"np.shape(observations_batch) = {np.shape(observations_batch)} and expecting (batch_size, stack_obs + unroll = 4 + 5 = 9, 10, 10) \n"
+    #       f"np.shape(values_targets_batch) = {np.shape(values_targets_batch)} \n"
+    #       f"np.shape(policy_targets_batch) = {np.shape(policy_targets_batch)} \n"
+    #       f"np.shape(mask_batch) = {np.shape(mask_batch)} \n"
+    #       f"=========================================================================== \n"
+    #       )
+    zero_obs = np.zeros(shape=(10, 10))
+    for i in range(batch_size):
+        observation_rollout = observations_batch[i, :, :, :]
+        for j in range(rollout_length + 1):
+            observation = observation_rollout[j + stacked_observations - 1, :, :]
+            if not np.array_equal(observation, zero_obs):
+                row, column = visitation_counter.from_one_hot_state_to_indexes(observation)
+                # Identify the indexes all the states that are on the diagonal
+                if row == column:
+                    diagonal_observation_indexes.append([i, j])
+                    diagonal_observations.append([row, column])
+
+    print(f"step_count = {step_count}, Num targets total = {batch_size * (rollout_length + 1)}, ouf of are diagonal = {len(diagonal_observation_indexes)}")
+    for index, state in zip(diagonal_observation_indexes, diagonal_observations):
+        [i, j] = index
+        print(f"Trajectory = {i}, State is: {state}, mask is: {mask_batch[i, j - 1] if j > 0 else None} value target is: {values_targets_batch[i, j]} and policy target is: {policy_targets_batch[i, j]}")

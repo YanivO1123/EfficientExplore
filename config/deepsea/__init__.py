@@ -14,24 +14,24 @@ from bsuite.utils import gym_wrapper
 class DeepSeaConfig(BaseConfig):
     def __init__(self):
         super(DeepSeaConfig, self).__init__(
-            training_steps=100000, #100000,
-            last_steps=20000,#20000
-            test_interval=500, #10000,
-            log_interval=500,
+            training_steps=40 * 1000, #100000,
+            last_steps=5000,#20000
+            test_interval=400, #10000,
+            log_interval=400,
             vis_interval=1000,
-            test_episodes=32,
+            test_episodes=4, # 32,
             checkpoint_interval=100,
             target_model_interval=200,
             save_ckpt_interval=10000,
-            max_moves=10, #12000, # Max moves are re-set in set_game to env_size
-            test_max_moves=10, #12000, # test_max_moves are re-set in set_game to env_size
-            history_length=10, # history_length is re-set in set_game to env_size
-            discount=0.997, # Might want lower
+            max_moves=10,   # Max moves are re-set in set_game to env_size
+            test_max_moves=10,  # test_max_moves are re-set in set_game to env_size
+            history_length=10,  # history_length is re-set in set_game to env_size
+            discount=0.997,     # Might want lower
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
-            batch_size=32, # 32 # 64 #256,  # TODO: can be larger with smaller net
-            td_steps=10, # 5,
+            batch_size=64,  # 32 # 64 #256,  # TODO: can be larger with smaller net
+            td_steps=3,     # 5, 10
             num_actors=1,
             # network initialization/ & normalization
             episode_life=False, # This uses properties of real gym
@@ -44,16 +44,17 @@ class DeepSeaConfig(BaseConfig):
             lr_warm_up=0.01,
             lr_init=0.2,
             lr_decay_rate=0.1,
-            lr_decay_steps=50000,
-            auto_td_steps_ratio=0.1, # 0.3,
+            lr_decay_steps=40 * 1000,
+            num_unroll_steps=5, # 5    The hardcoded default is 5. Might not work reliably with other values
+            auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=500, # 32
-            total_transitions=100 * 1000,
+            start_transitions=600,   # 500 400 32
+            total_transitions=40 * 1000,
             transition_num=1,
             do_consistency=True,
             # frame skip & stack observation
             frame_skip=1,      # TODO: I believe this is skipping * 1
-            stacked_observations=4,
+            stacked_observations=1, # 4 2
             # coefficient
             reward_loss_coeff=1,
             value_loss_coeff=1, # 0.25,
@@ -63,12 +64,12 @@ class DeepSeaConfig(BaseConfig):
             lstm_hidden_size=128, #512,    # TODO: Can lower aggressively
             lstm_horizon_len=5,
             # siamese
-            proj_hid=1024, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            proj_out=1024, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            pred_hid=512, # 32, #512,     # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            pred_out=1024, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            value_support=DiscreteSupport(-15, 15, delta=1),
-            reward_support=DiscreteSupport(-15, 15, delta=1),
+            proj_hid=512, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            proj_out=512, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            pred_hid=256, # 32, #512,     # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            pred_out=512, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            value_support=DiscreteSupport(-10, 10, delta=1),
+            reward_support=DiscreteSupport(-10, 10, delta=1),
             # MuExplore
             # Architecture
             use_uncertainty_architecture=False,
@@ -185,6 +186,8 @@ class DeepSeaConfig(BaseConfig):
 
     def new_game(self, seed=None, save_video=False, save_path=None, video_callable=None, uid=None, test=False,
                  final_test=False):
+        # We make all deep_sea envs with the same action mapping seed, which is the seed of the config
+        # The input seed can be used to init the rest of the env (for stoch. deepsea)
         env = make_deepsea(self.env_name, seed=self.seed)
 
         if save_video:

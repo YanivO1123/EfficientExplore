@@ -60,12 +60,13 @@ cdef extern from "cnode.h" namespace "tree":
         vector[int] get_children_distribution()
         #MuExplore: get value uncertainty of children of node
         vector[float] get_children_uncertainties(float discount)
+        vector[float] get_children_values(float discount)
         CNode* get_child(int action)
 
     cdef cppclass CRoots:
         CRoots() except +
         CRoots(int root_num, int action_num, int pool_size) except +
-        CRoots(int root_num, int action_num, int pool_size, float beta) except +
+        CRoots(int root_num, int action_num, int pool_size, float beta, int num_exploratory) except +
         int root_num, action_num, pool_size
         vector[CNode] roots
         vector[vector[CNode]] node_pools
@@ -73,12 +74,13 @@ cdef extern from "cnode.h" namespace "tree":
         void prepare(float root_exploration_fraction, const vector[vector[float]] &noises, const vector[float] &value_prefixs, const vector[vector[float]] &policies)
         void prepare_no_noise(const vector[float] &value_prefixs, const vector[vector[float]] &policies)
         #MuExplore: prepare_explore prepares roots for exploration episodes
-        void prepare_explore(float root_exploration_fraction, const vector[vector[float]] &noises, const vector[float] &value_prefixs, const vector[vector[float]] &policies, const vector[float] &value_prefixs_uncertainty, float beta)
+        void prepare_explore(float root_exploration_fraction, const vector[vector[float]] &noises, const vector[float] &value_prefixs, const vector[vector[float]] &policies, const vector[float] &value_prefixs_uncertainty, float beta, int num_exploratory)
         void clear()
         vector[vector[int]] get_trajectories()
         vector[vector[int]] get_distributions()
         # MuExplore: get the uncertainties of the children of each node in roots
         vector[vector[float]] get_roots_children_uncertainties(float discount)
+        vector[vector[float]] get_roots_children_values(float discount)
         vector[float] get_values()
         vector[float] get_values_uncertainty()
 
@@ -98,5 +100,5 @@ cdef extern from "cnode.h" namespace "tree":
     #MuExplore: cbatch_back_propagate that backprops uncertainty
     void cuncertainty_batch_back_propagate(int hidden_state_index_x, float discount, vector[float] value_prefixs, vector[float] values, vector[vector[float]] policies,
                                CMinMaxStatsList *min_max_stats_lst, CSearchResults &results, vector[int] is_reset_lst,
-                                          vector[float] value_prefixs_uncertainty, vector[float] values_uncertainty)
+                                          vector[float] value_prefixs_uncertainty, vector[float] values_uncertainty, int num_exploratory)
     void cbatch_traverse(CRoots *roots, int pb_c_base, float pb_c_init, float discount, CMinMaxStatsList *min_max_stats_lst, CSearchResults &results)

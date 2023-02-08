@@ -44,6 +44,7 @@ class BaseConfig(object):
                  lr_decay_rate: float,
                  lr_decay_steps: float,
                  start_transitions: int,
+                 num_unroll_steps: int = 5,
                  auto_td_steps_ratio: float = 0.3,
                  total_transitions: int = 100 * 1000,
                  transition_num: float = 25,
@@ -144,6 +145,8 @@ class BaseConfig(object):
             lr drops every lr_decay_steps
         start_transitions: int
             least transition numbers to start the training steps ( larger than batch size)
+        num_unroll_steps: int
+            The number of steps to unroll in training the recurrent networks of MuZero
         auto_td_steps_ratio: float
             ratio of short td steps, samller td steps for older trajectories.
             auto_td_steps = auto_td_steps_ratio * training_steps
@@ -291,7 +294,7 @@ class BaseConfig(object):
         self.transition_num = transition_num
         self.batch_size = batch_size
         # unroll steps
-        self.num_unroll_steps = 5
+        self.num_unroll_steps = num_unroll_steps # 5
         self.td_steps = td_steps
         self.frame_skip = frame_skip
         self.stacked_observations = stacked_observations
@@ -486,10 +489,10 @@ class BaseConfig(object):
             if args.case == 'deep_sea':
                 self.ensemble_size = 10
                 self.start_transitions = max(self.start_transitions, self.batch_size)
-                self.proj_hid = 1024
-                self.proj_out = 1024
-                self.pred_hid = 512
-                self.pred_out = 1024
+                # self.proj_hid = 1024
+                # self.proj_out = 1024
+                # self.pred_hid = 512
+                # self.pred_out = 1024
 
             if args.case == 'atari':
                 # Base network arch.
@@ -519,6 +522,11 @@ class BaseConfig(object):
         self.mu_explore = args.mu_explore and (self.use_uncertainty_architecture or self.use_visitation_counter)
         self.disable_policy_in_exploration = args.disable_policy_in_exploration
         self.root_exploration_fraction = args.exploration_fraction
+        # MuExplore: number_of_exploratory_envs defaults to all envs - 1
+        self.number_of_exploratory_envs = self.p_mcts_num - 1 if self.mu_explore else 0
+        if args.number_of_exploratory_envs is not None:
+            assert args.number_of_exploratory_envs <= self.p_mcts_num
+            self.number_of_exploratory_envs = args.number_of_exploratory_envs
         if args.use_max_value_targets and self.mu_explore:
             self.use_max_value_targets = args.use_max_value_targets
             self.use_max_policy_targets = self.use_max_value_targets and args.use_max_value_targets

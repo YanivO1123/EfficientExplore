@@ -117,6 +117,10 @@ class DataWorker(object):
         print(f"Model started", flush=True)
         start_training = False
         envs = [self.config.new_game(self.config.seed + (self.rank + 1) * i) for i in range(env_nums)]
+        if self.config.mu_explore:
+            exploit_env_nums = env_nums - self.config.number_of_exploratory_envs
+        else:
+            exploit_env_nums = env_nums
         print(f"Envs started", flush=True)
         # MuExplore: start the visitation counter if it's wanted
         if self.config.use_visitation_counter and 'deep_sea' in self.config.env_name:
@@ -147,7 +151,7 @@ class DataWorker(object):
                 dones = np.array([False for _ in range(env_nums)])
                 game_histories = [GameHistory(envs[i].env.action_space, max_length=self.config.history_length,
                                               config=self.config,
-                                              exploration_episode=(i > 0 and self.config.mu_explore))
+                                              exploration_episode=(i < exploit_env_nums and self.config.mu_explore))
                                   for i in range(env_nums)]
                 last_game_histories = [None for _ in range(env_nums)]
                 last_game_priorities = [None for _ in range(env_nums)]
@@ -257,7 +261,7 @@ class DataWorker(object):
                             init_obs = envs[i].reset()
                             game_histories[i] = GameHistory(env.env.action_space, max_length=self.config.history_length,
                                                             config=self.config,
-                                                            exploration_episode=(i > 0 and self.config.mu_explore))
+                                                            exploration_episode=(i < exploit_env_nums and self.config.mu_explore))
                             last_game_histories[i] = None
                             last_game_priorities[i] = None
                             stack_obs_windows[i] = [init_obs for _ in range(self.config.stacked_observations)]
@@ -314,11 +318,11 @@ class DataWorker(object):
                     if self.config.mu_explore:
                         # MuExplore: Disable policy in prior
                         if self.config.disable_policy_in_exploration:
-                            policy_logits_pool = [policy_logits_pool[0]] + [np.ones_like(policy_logits_pool[0]).tolist()
-                                                                            for _ in range(len(policy_logits_pool) - 1)]
-                        roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations, self.config.beta)
+                            policy_logits_pool = policy_logits_pool[:exploit_env_nums] + [np.ones_like(policy_logits_pool[0]).tolist()
+                                                                            for _ in range(len(policy_logits_pool) - exploit_env_nums)]
+                        roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations, self.config.beta, self.config.number_of_exploratory_envs)
                         roots.prepare_explore(self.config.root_exploration_fraction, noises, value_prefix_pool,
-                                              policy_logits_pool, value_prefix_variance_pool, self.config.beta)
+                                              policy_logits_pool, value_prefix_variance_pool, self.config.beta, self.config.number_of_exploratory_envs)
                     else:
                         roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations)
                         roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool,
@@ -330,7 +334,7 @@ class DataWorker(object):
                                                  self.visitation_counter, initial_observations_for_counter, use_state_visits=self.config.plan_with_state_visits)
                     else:   # Otherwise
                         # do MCTS for a policy
-                        MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots)
+                        MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=True)
 
                     roots_distributions = roots.get_distributions()
                     roots_values = roots.get_values()
@@ -347,55 +351,22 @@ class DataWorker(object):
                             value, temperature, env = roots_values[i], _temperature[i], envs[i]
                             distributions = np.ones(self.config.action_space_size)
 
-                        if 'deep_sea' in self.config.env_name:    # We don't want random actions in deep_sea
+                        # We don't want random actions in deep_sea, except for the exploiting env
+                        if 'deep_sea' in self.config.env_name:
                             distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
                             deterministic = True
 
                         action, visit_entropy = select_action(distributions, temperature=temperature, deterministic=deterministic)
                         # MuExplore: Add state-action to visitation counter
-                        if self.config.use_visitation_counter and i > 0: # this will show ONLY what the exploratory episodes are doing, for debugging
+                        if self.config.use_visitation_counter: # and i > 0: # this will show ONLY what the exploratory episodes are doing, for debugging
                             # Take the last observation that was stored, and the current action
                             self.visitation_counter.observe(game_histories[i].obs_history[-1], action)
 
                         # MuExplore debugging: do the uncertainty and root visitations agree?
-                        if i > 0 and self.config.mu_explore and 'deep_sea' in self.config.env_name \
-                                and self.config.plan_with_fake_visit_counter and total_transitions > self.config.start_transitions:
-                            row, column = initial_observations_for_counter[i]
-                            action_right = self.visitation_counter.identify_action_right(row, column)
-                            children_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)[i]
-                            # If everything was correct except action selection, print
-                            if row == column and action_right != action:
-                                print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
-                                      f"In env {i}, fake uncertainty, action selection is incorrect. \n "
-                                      f"Action right is {action_right} and action chosen in {action} \n"
-                                      f"State is {initial_observations_for_counter[i]} \n"
-                                      f"Uncertainties are: {children_uncertainties} \n"
-                                      f"Visitations counting are: {distributions} \n"
-                                      f"Value is: {value} \n"
-                                      f"deterministic is: {deterministic} \n"
-                                      f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
-                                      , flush=True)
-                            # If action right has LESS uncertainty than action left, and state is along the diagonal, print visitations, uncertainties and values
-                            if row == column and children_uncertainties[action_right] <= children_uncertainties[1 - action_right]:
-                                print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
-                                      f"In env {i}, fake uncertainty, MCTS uncertainty is incorrect. \n "
-                                      f"Action right is {action_right} \n"
-                                      f"State is {initial_observations_for_counter[i]} \n"
-                                      f"Uncertainties are: {children_uncertainties} \n"
-                                      f"Visitations counting are: {distributions} \n"
-                                      f"Value is: {value} \n"
-                                      f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
-                                      , flush=True)
-                            # If visitations right are LESS than visitations left and state is along the diagonal, print every
-                            if row == column and np.argmax(distributions) != np.argmax(children_uncertainties):
-                                print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% \n"
-                                      f"In env {i}, visitation counting do not agree with uncertainty max. \n "
-                                      f"Action right is {action_right} \n"
-                                      f"Uncertainties are: {children_uncertainties} \n"
-                                      f"Visitations counting are: {distributions} \n"
-                                      f"Value is: {value} \n"
-                                      f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% \n"
-                                      , flush=True)
+                        if False:
+                            self.debug_uncertainty(total_transitions, initial_observations_for_counter[i][0],
+                                                   initial_observations_for_counter[i][1], i, roots, action,
+                                                   distributions, value, deterministic)
 
                         obs, ori_reward, done, info = env.step(action)
 
@@ -450,7 +421,7 @@ class DataWorker(object):
                             # new block trajectory
                             game_histories[i] = GameHistory(envs[i].env.action_space, max_length=self.config.history_length,
                                                             config=self.config,
-                                                            exploration_episode=(i > 0 and self.config.mu_explore))
+                                                            exploration_episode=(i < exploit_env_nums and self.config.mu_explore))
                             game_histories[i].init(stack_obs_windows[i])
 
                     if self.config.mu_explore:
@@ -458,25 +429,29 @@ class DataWorker(object):
                         value_max = max(value_max, np.max(roots_values))
                         value_min = min(value_min, np.min(roots_values))
                         value_sum += sum(roots_values)
-                        value_unc_max = max(value_unc_max, np.max(root_values_uncertainties[1:]))
-                        value_unc_min = min(value_unc_min, np.min(root_values_uncertainties[1:]))
-                        value_unc_sum += sum(root_values_uncertainties[1:])
+                        value_unc_max = max(value_unc_max, np.max(root_values_uncertainties[exploit_env_nums:]))
+                        value_unc_min = min(value_unc_min, np.min(root_values_uncertainties[exploit_env_nums:]))
+                        value_unc_sum += sum(root_values_uncertainties[exploit_env_nums:])
                         if (total_transitions - self.config.p_mcts_num) % (self.config.test_interval) == 0:
                             print(f"Printing root-values and root-values-uncertainties statistics at transition number "
                                   f"{total_transitions}: \n"
                                   f"values: max = {value_max}, min: {value_min}, mean: "
                                   f"{value_sum / total_transitions} \n"
                                   f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
-                                  f"{value_unc_sum / (total_transitions * 3 / 4) } \n"
+                                  f"{value_unc_sum / (total_transitions * self.config.number_of_exploratory_envs / self.config.p_mcts_num) } \n"
                                   , flush=True)
 
-                    if 'deep_sea' in self.config.env_name and self.config.use_visitation_counter and (total_transitions - self.config.p_mcts_num) % 20 == 0: # % (self.config.test_interval)
-                        print(f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
-                              f"Printing the state-action visitation counter at the last row: \n"
+                    if 'deep_sea' in self.config.env_name and self.config.use_visitation_counter and total_transitions % self.config.test_interval == 0:
+                        print(f"Printing the state-action visitation counter at the last row: \n"
                               f"{self.visitation_counter.sa_counts[-1, :, :]} \n"
+                              # f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
                               f"Printing the state visitation counter: \n"
                               f"{self.visitation_counter.s_counts}"
                               , flush=True)
+                        try:
+                            self.debug_deep_sea(model)
+                        except:
+                            traceback.print_exc()
 
                 for i in range(env_nums):
                     env = envs[i]
@@ -525,3 +500,109 @@ class DataWorker(object):
                                                                 self_play_rewards_max, _temperature.mean(),
                                                                 visit_entropies, 0,
                                                                 other_dist)
+
+    def debug_deep_sea(self, model):
+        """
+           evaluates the results of MCTS over the diagonal of deep_sea/0
+        """
+        # First, setup observation batches of shape (10, 1, 10, 10)
+        env_nums = 10
+        zero_obs = np.zeros(shape=(10, 10))
+        batched_obs = []
+        for i in range(10):
+            current_obs = np.zeros(shape=(10, 10))
+            current_obs[i, i] = 1
+            # if i == 0:
+            #     stack_obs = np.stack([zero_obs, zero_obs, zero_obs, current_obs], axis=0)
+            # elif i == 1:
+            #     one_obs = np.zeros(shape=(10, 10))
+            #     one_obs[0, 0] = 1
+            #     stack_obs = np.stack([zero_obs, zero_obs, one_obs, current_obs], axis=0)
+            # elif i == 2:
+            #     one_obs = np.zeros(shape=(10, 10))
+            #     one_obs[0, 0] = 1
+            #     two_obs = np.zeros(shape=(10, 10))
+            #     two_obs[1, 1] = 1
+            #     stack_obs = np.stack([zero_obs, one_obs, two_obs, current_obs], axis=0)
+            # else:
+            #     stack_obs = []
+            #     for j in range(3, 0, -1):
+            #         obs = np.zeros(shape=(10, 10))
+            #         obs[i - j][i - j] = 1
+            #         stack_obs.append(obs)
+            #     stack_obs.append(current_obs)
+            #     stack_obs = np.asarray(stack_obs)
+            stack_obs = current_obs[np.newaxis, :]
+            batched_obs.append(stack_obs)
+        batched_obs = np.asarray(batched_obs)
+        stack_obs = torch.from_numpy(batched_obs).to(self.device).float()
+
+        # Second, setup everything to call MCTS
+        if self.config.amp_type == 'torch_amp':
+            with autocast():
+                network_output = model.initial_inference(stack_obs.float())
+        else:
+            network_output = model.initial_inference(stack_obs.float())
+        hidden_state_roots = network_output.hidden_state
+        reward_hidden_roots = network_output.reward_hidden
+        value_prefix_pool = network_output.value_prefix
+        policy_logits_pool = network_output.policy_logits.tolist()
+        value_prefix_variance_pool = network_output.value_prefix_variance
+        value_pool = network_output.value
+        noises = [
+            np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
+                np.float32).tolist() for _ in range(env_nums)]
+        roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations)
+        roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool,
+                      policy_logits_pool)
+
+        # Call MCTS:
+        MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots)
+        roots_distributions = roots.get_distributions()
+        roots_values = roots.get_values()
+        children_values = roots.get_roots_children_values(self.config.discount)
+
+        # Print the results
+        for i in range(10):
+            action_right = self.visitation_counter.identify_action_right(i, i)
+            print(f"At state {(i, i)}, root_value = {roots_values[i]}, prediction_value = {value_pool[i]} children_values = {children_values[i]} roots_distributions = {roots_distributions[i]}, action_right = {action_right}"
+                  , flush=True)
+
+    def debug_uncertainty(self, total_transitions, row, column, i, roots, action, distributions, value, deterministic):
+        if i > (self.config.p_mcts_num - self.config.number_of_exploratory_envs) and self.config.mu_explore and 'deep_sea' in self.config.env_name \
+                and self.config.plan_with_fake_visit_counter and total_transitions > self.config.start_transitions:
+            action_right = self.visitation_counter.identify_action_right(row, column)
+            children_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)[i]
+            # If everything was correct except action selection, print
+            if row == column and action_right != action:
+                print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
+                      f"In env {i}, fake uncertainty, action selection is incorrect. \n "
+                      f"Action right is {action_right} and action chosen in {action} \n"
+                      f"State is {(row, column)} \n"
+                      f"Uncertainties are: {children_uncertainties} \n"
+                      f"Visitations counting are: {distributions} \n"
+                      f"Value is: {value} \n"
+                      f"deterministic is: {deterministic} \n"
+                      f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
+                      , flush=True)
+            # If action right has LESS uncertainty than action left, and state is along the diagonal, print visitations, uncertainties and values
+            if row == column and children_uncertainties[action_right] <= children_uncertainties[1 - action_right]:
+                print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
+                      f"In env {i}, fake uncertainty, MCTS uncertainty is incorrect. \n "
+                      f"Action right is {action_right} \n"
+                      f"State is {(row, column)} \n"
+                      f"Uncertainties are: {children_uncertainties} \n"
+                      f"Visitations counting are: {distributions} \n"
+                      f"Value is: {value} \n"
+                      f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&& \n"
+                      , flush=True)
+            # If visitations right are LESS than visitations left and state is along the diagonal, print every
+            if row == column and np.argmax(distributions) != np.argmax(children_uncertainties):
+                print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% \n"
+                      f"In env {i}, visitation counting do not agree with uncertainty max. \n "
+                      f"Action right is {action_right} \n"
+                      f"Uncertainties are: {children_uncertainties} \n"
+                      f"Visitations counting are: {distributions} \n"
+                      f"Value is: {value} \n"
+                      f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% \n"
+                      , flush=True)

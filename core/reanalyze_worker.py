@@ -12,6 +12,8 @@ from core.utils import prepare_observation_lst, LinearSchedule
 
 import traceback
 
+from core.visitation_counter import CountUncertainty
+
 
 @ray.remote
 class BatchWorker_CPU(object):
@@ -128,6 +130,7 @@ class BatchWorker_CPU(object):
         # MuExplore:
         exploration_episodes = []
         zero_step_value_obs_lst = []
+        zero_step_value_mask = []
 
         for game, state_index, idx in zip(games, state_index_lst, indices):
             traj_len = len(game)
@@ -150,22 +153,27 @@ class BatchWorker_CPU(object):
                 td_steps_lst.append(td_steps)
                 bootstrap_index = current_index + td_steps
 
+                beg_index = bootstrap_index - (state_index + td_steps)
+                end_index = beg_index + config.stacked_observations
+
                 if bootstrap_index < traj_len:
                     value_mask.append(1)
-                    beg_index = bootstrap_index - (state_index + td_steps)
-                    end_index = beg_index + config.stacked_observations
                     obs = game_obs[beg_index:end_index]
-                    # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
-                    zero_step_obs = current_value_game_obs[beg_index:end_index]
-
-                #TODO: MuExplore: if the bootstrap_index is outside of the trajectory, but not for 0-step values, in
-                # principle I need to compute the 0-step value. However, this can induce ignoring terminals, which is
-                # really dangerous, so instead I'm leaving this as is
                 else:
                     value_mask.append(0)
                     obs = zero_obs
                     # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
+
+                #TODO: MuExplore: if the bootstrap_index is outside of the trajectory, but not for 0-step values, in
+                # principle I need to compute the 0-step value. However, this can induce ignoring terminals, which is
+                # really dangerous, so instead I'm leaving this as is
+                if bootstrap_index - td_steps < traj_len:
+                    # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
+                    zero_step_obs = current_value_game_obs[beg_index:end_index]
+                    zero_step_value_mask.append(1)
+                else:
                     zero_step_obs = zero_obs
+                    zero_step_value_mask.append(0)
 
                 value_obs_lst.append(obs)
                 # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
@@ -176,7 +184,7 @@ class BatchWorker_CPU(object):
         # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
         zero_step_value_obs_lst = ray.put(zero_step_value_obs_lst)
 
-        reward_value_context = [value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst]
+        reward_value_context = [value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst, zero_step_value_mask]
         return reward_value_context
 
     def _prepare_policy_non_re_context(self, indices, games, state_index_lst):
@@ -395,6 +403,11 @@ class BatchWorker_GPU(object):
 
         self.last_model_index = 0
 
+        if 'deep_sea' in self.config.env_name:
+            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=self.config.p_mcts_num,
+                                                       mapping_seed=self.config.seed,
+                                                       fake=self.config.plan_with_fake_visit_counter)
+
     #TODO: Complete the target generation for UBE
     def _prepare_ube(self, ube_context):
         """
@@ -498,7 +511,7 @@ class BatchWorker_GPU(object):
             The function _prepare_reward_value_max_targets() is only compatible with reward_value_context that has been
                 prepared by the function _prepare_reward_value_context_w_max_targets()
         """
-        value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst = reward_value_context
+        value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst, zero_step_value_mask  = reward_value_context
         value_obs_lst = ray.get(value_obs_lst)
         zero_step_value_obs_lst = ray.get(zero_step_value_obs_lst)
         device = self.config.device
@@ -569,7 +582,7 @@ class BatchWorker_GPU(object):
 
             # MuExplore: set the 0-step values to the same format
             value_lst_zero_step = value_lst_zero_step.reshape(-1)   # This is a 0-step target, there's no need to discount
-            value_lst_zero_step = value_lst_zero_step * np.array(value_mask)
+            value_lst_zero_step = value_lst_zero_step * np.array(zero_step_value_mask)
             value_lst_zero_step = value_lst_zero_step.tolist()
 
             value_index = 0
@@ -820,6 +833,15 @@ class BatchWorker_GPU(object):
             batch_policies = np.concatenate([batch_policies_re, batch_policies_non_re])
 
             targets_batch = [batch_value_prefixs, batch_values, batch_policies]
+
+            # Go over this batch. look for targets that are diagonal, exploratory, and 0.0
+            step_count = ray.get(self.storage.get_counter.remote())
+            if self.config.use_max_value_targets and 'deep_sea' in self.config.env_name and step_count % self.config.test_interval == 0:
+                try:
+                    self.debug_deep_sea(batch_values, batch_policies, reward_value_context, max_targets, step_count)
+                except:
+                    traceback.print_exc()
+
             # a batch contains the inputs and the targets; inputs is prepared in CPU workers
             self.batch_storage.push([inputs_batch, targets_batch])
 
@@ -836,5 +858,60 @@ class BatchWorker_GPU(object):
             if trained_steps >= self.config.training_steps + self.config.last_steps:
                 time.sleep(30)
                 break
+            try:
+                self._prepare_target_gpu()
+            except:
+                traceback.print_exc()
 
-            self._prepare_target_gpu()
+    def debug_deep_sea(self, batch_values, batch_policies, reward_value_context, max_targets, step_count):
+        value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst, zero_step_value_mask = reward_value_context
+        zero_step_value_obs_lst = ray.get(zero_step_value_obs_lst)
+
+        count = 0
+        exploratory_zero_targets = 0
+        individual_counts = np.zeros(10)
+        zero_target_exploratory_states_set = set()
+        # print(f"np.shape(max_targets) = {np.shape(max_targets)} \n"
+        #       f"np.shape(batch_values) = {np.shape(batch_values)} \n"
+        #       f"np.shape(batch_policies) = {np.shape(batch_policies)} \n"
+        #       f"np.shape(exploration_episodes) = {np.shape(exploration_episodes)} \n"
+        #       f"np.shape(zero_step_value_obs_lst) = {np.shape(zero_step_value_obs_lst)} \n"
+        #       f"np.shape(value_mask) = {np.shape(value_mask)} \n"
+        #       f"np.shape(state_index_lst) = {np.shape(state_index_lst)} \n"
+        #       )
+        # For all episodes in batch
+        for index_batch, exploratory_episode in enumerate(exploration_episodes):
+            # For all states that are diagonal
+            for index_rollout, batch_value in enumerate(batch_values[index_batch]):
+                # The observations is flattened like batch_size * (rollout + 1) = 64 * 6 = 384
+                # for final shape (384, 4, 10, 10).
+                index_observation = index_batch * (self.config.num_unroll_steps + 1) + index_rollout
+                observation = zero_step_value_obs_lst[index_observation][-1]
+                row, column = self.visitation_counter.from_one_hot_state_to_indexes(observation)
+                if row == column:
+                    # For all values that are zero
+                    if batch_values[index_batch][index_rollout] == 0:
+                        if np.array_equal(np.asarray(batch_policies[index_batch][index_rollout]), np.asarray([0.5, 0.5])):
+                            count += 1
+                            # print(f"In reanalyze, in debug_deep_sea. State: {(row, column)}, in game: {index_batch}, "
+                            #       f"exploration episode: {exploratory_episode} \n"
+                            #       f"Value target = {batch_values[index_batch][index_rollout]}, "
+                            #       f"policy target = {batch_policies[index_batch][index_rollout]}, "
+                            #       f"value_mask = {value_mask[index_observation]} \n"
+                            #       f"Used n-step target: {max_targets[index_batch, index_rollout]} \n")
+                            if exploratory_episode:
+                                exploratory_zero_targets += 1
+                                individual_counts[row] += 1
+                                zero_target_exploratory_states_set.add(state_index_lst[index_batch] // 10)
+        # later_transitions = [(position // 10, position % 10)
+        #                      for _, position in enumerate(zero_target_exploratory_states_set) if position > 200]
+        print(f"#######################################################################\n"
+              f"In reanalyze, in debug_deep_sea. Learning step = {step_count} \n "
+              f"Total number of targets that are diagonal, valued 0 and policy flat: {count} \n"
+              f"Out of them are from exploratory episodes: {exploratory_zero_targets}. \n"
+              f"Individual count per state: {individual_counts} \n"
+              f"Out of total targets of: {self.config.batch_size * (self.config.num_unroll_steps + 1)} \n"
+              f"And all the individual games these targets came from, after the first 20 games: \n "
+              f"{zero_target_exploratory_states_set} \n"
+              f"#######################################################################\n"
+              )
