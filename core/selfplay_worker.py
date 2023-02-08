@@ -124,7 +124,10 @@ class DataWorker(object):
         print(f"Envs started", flush=True)
         # MuExplore: start the visitation counter if it's wanted
         if self.config.use_visitation_counter and 'deep_sea' in self.config.env_name:
-            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=env_nums, mapping_seed=self.config.seed, fake=self.config.plan_with_fake_visit_counter)
+            self.visitation_counter = CountUncertainty(name=self.config.env_name, num_envs=env_nums,
+                                                       mapping_seed=self.config.seed,
+                                                       fake=self.config.plan_with_fake_visit_counter,
+                                                       randomize_actions=self.config.deepsea_randomize_actions)
             print(f"Initiated visitation counter", flush=True)
         def _get_max_entropy(action_space):
             p = 1.0 / action_space
