@@ -188,7 +188,7 @@ class DeepSeaConfig(BaseConfig):
                  final_test=False):
         # We make all deep_sea envs with the same action mapping seed, which is the seed of the config
         # The input seed can be used to init the rest of the env (for stoch. deepsea)
-        env = make_deepsea(self.env_name, seed=self.seed)
+        env = make_deepsea(self.env_name, seed=self.seed, randomize_actions=self.deepsea_randomize_actions)
 
         if save_video:
             print("Does not have save_video option in deep_sea, proceeding without")

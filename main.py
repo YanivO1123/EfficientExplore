@@ -87,6 +87,8 @@ if __name__ == '__main__':
                         help="It's used for switching between different domains(default: %(default)s)")
     parser.add_argument('--number_of_exploratory_envs', type=int, default=None, help='If MuExplore, number of environments <= p_mcts_num that'
                                                                                      'are exploratory')
+    parser.add_argument('--det_deepsea_actions', action='store_true', default=False,
+                        help="If true, use determinstic deep sea actions ")
 
 
 

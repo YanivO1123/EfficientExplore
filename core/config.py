@@ -367,6 +367,9 @@ class BaseConfig(object):
         # Target types in exploration
         self.use_max_value_targets = use_max_value_targets
         self.use_max_policy_targets = use_max_policy_targets
+        
+        # Deep sea for debugging
+        self.deepsea_randomize_actions = True
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -524,6 +527,7 @@ class BaseConfig(object):
         self.root_exploration_fraction = args.exploration_fraction
         # MuExplore: number_of_exploratory_envs defaults to all envs - 1
         self.number_of_exploratory_envs = self.p_mcts_num - 1 if self.mu_explore else 0
+        self.deepsea_randomize_actions = not args.det_deepsea_actions
         if args.number_of_exploratory_envs is not None:
             assert args.number_of_exploratory_envs <= self.p_mcts_num
             self.number_of_exploratory_envs = args.number_of_exploratory_envs

@@ -241,10 +241,10 @@ def make_atari(env_id, skip=4, max_episode_steps=None):
         env = TimeLimit(env, max_episode_steps=max_episode_steps)
     return env
 
-def make_deepsea(env_id, seed):
+def make_deepsea(env_id, seed, randomize_actions):
     # env = bsuite.load_from_id(env_id)
     size = sweep.SETTINGS[env_id]['size']
-    env = DeepSea(size=size, mapping_seed=seed, seed=seed)
+    env = DeepSea(size=size, mapping_seed=seed, seed=seed, randomize_actions=randomize_actions)
     env = bsuite_gym_wrapper.GymFromDMEnv(env)
     return env
 
