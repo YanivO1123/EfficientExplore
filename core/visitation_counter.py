@@ -10,7 +10,7 @@ class CountUncertainty:
         Uncertainty will be scaled by 'scale'.
         Only implemented for the deep_sea environment
     """
-    def __init__(self, name, num_envs, mapping_seed, scale=1, epsilon=1E-7, fake=False):
+    def __init__(self, name, num_envs, mapping_seed, scale=1, epsilon=1E-7, fake=False, randomize_actions=True):
         """
             name: the name of the env (deep_sea/N)
             num_envs: num of parallel envs for planning with MCTS
@@ -30,7 +30,7 @@ class CountUncertainty:
         self.eps = epsilon
         self.num_envs = num_envs
         # we init all envs with the same seed, because we also init all the real envs with the same seed
-        self.planning_env = DeepSea(size=self.size, mapping_seed=mapping_seed, seed=mapping_seed)
+        self.planning_env = DeepSea(size=self.size, mapping_seed=mapping_seed, seed=mapping_seed, randomize_actions=randomize_actions)
         self.observation_counter = 0
         self.rewarding_transition = self.identify_rewarding_transition()
         self.fake_reward_uncertainty = fake
