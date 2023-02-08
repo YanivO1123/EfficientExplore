@@ -339,9 +339,6 @@ class DataWorker(object):
                     roots_distributions = roots.get_distributions()
                     roots_values = roots.get_values()
 
-                    if total_transitions % self.config.test_interval == 0:
-                        os.system("nvidia-smi")
-
                     for i in range(env_nums):
                         deterministic = False
                         if start_training:
@@ -372,11 +369,41 @@ class DataWorker(object):
 
                         if ori_reward > 0 and 'deep_sea' in self.config.env_name:
                             ori_reward = ori_reward * 10
-                            print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
-                                  f"Encountered reward: {ori_reward}. Env index is :{i}. "
+                            print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
+                                  f"Encountered reward: {ori_reward}. Env index is :{i}. Transition is {total_transitions}. "
                                   f"State is: {initial_observations_for_counter[i]}, and action is: {action} \n"
-                                  f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
+                                  f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
                                   , flush=True)
+
+                        if self.config.mu_explore and total_transitions % self.config.test_interval == 0:
+                            try:
+                                os.system("nvidia-smi")
+                                if total_transitions > 0:
+                                    root_values_uncertainties = roots.get_values_uncertainty()
+                                    value_max = max(value_max, np.max(roots_values))
+                                    value_min = min(value_min, np.min(roots_values))
+                                    value_sum += sum(roots_values)
+                                    value_unc_max = max(value_unc_max, np.max(root_values_uncertainties[exploit_env_nums:]))
+                                    value_unc_min = min(value_unc_min, np.min(root_values_uncertainties[exploit_env_nums:]))
+                                    value_unc_sum += sum(root_values_uncertainties[exploit_env_nums:])
+                                    print(
+                                        f"Printing root-values and root-values-uncertainties statistics at transition number "
+                                        f"{total_transitions}: \n"
+                                        f"values: max = {value_max}, min: {value_min}, mean: "
+                                        f"{value_sum / total_transitions} \n"
+                                        f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
+                                        f"{value_unc_sum / (total_transitions * self.config.number_of_exploratory_envs / self.config.p_mcts_num)} \n"
+                                        , flush=True)
+                                if self.config.use_visitation_counter:
+                                    print(f"Printing the state-action visitation counter at the last row: \n"
+                                          f"{self.visitation_counter.sa_counts[-1, :, :]} \n"
+                                          # f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
+                                          f"Printing the state visitation counter: \n"
+                                          f"{self.visitation_counter.s_counts}"
+                                          , flush=True)
+                                self.debug_deep_sea(model)
+                            except:
+                                traceback.print_exc()
 
                         # clip the reward
                         if self.config.clip_reward:
@@ -423,35 +450,6 @@ class DataWorker(object):
                                                             config=self.config,
                                                             exploration_episode=(i < exploit_env_nums and self.config.mu_explore))
                             game_histories[i].init(stack_obs_windows[i])
-
-                    if self.config.mu_explore:
-                        root_values_uncertainties = roots.get_values_uncertainty()
-                        value_max = max(value_max, np.max(roots_values))
-                        value_min = min(value_min, np.min(roots_values))
-                        value_sum += sum(roots_values)
-                        value_unc_max = max(value_unc_max, np.max(root_values_uncertainties[exploit_env_nums:]))
-                        value_unc_min = min(value_unc_min, np.min(root_values_uncertainties[exploit_env_nums:]))
-                        value_unc_sum += sum(root_values_uncertainties[exploit_env_nums:])
-                        if (total_transitions - self.config.p_mcts_num) % (self.config.test_interval) == 0:
-                            print(f"Printing root-values and root-values-uncertainties statistics at transition number "
-                                  f"{total_transitions}: \n"
-                                  f"values: max = {value_max}, min: {value_min}, mean: "
-                                  f"{value_sum / total_transitions} \n"
-                                  f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
-                                  f"{value_unc_sum / (total_transitions * self.config.number_of_exploratory_envs / self.config.p_mcts_num) } \n"
-                                  , flush=True)
-
-                    if 'deep_sea' in self.config.env_name and self.config.use_visitation_counter and total_transitions % self.config.test_interval == 0:
-                        print(f"Printing the state-action visitation counter at the last row: \n"
-                              f"{self.visitation_counter.sa_counts[-1, :, :]} \n"
-                              # f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
-                              f"Printing the state visitation counter: \n"
-                              f"{self.visitation_counter.s_counts}"
-                              , flush=True)
-                        try:
-                            self.debug_deep_sea(model)
-                        except:
-                            traceback.print_exc()
 
                 for i in range(env_nums):
                     env = envs[i]
