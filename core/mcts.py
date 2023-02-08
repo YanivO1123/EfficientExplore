@@ -105,7 +105,7 @@ class MCTS(object):
                 hidden_state_index_x += 1
 
                 #MuExplore: Backprop. w. uncertainty
-                if self.config.mu_explore and acting:
+                if self.config.mu_explore and acting and self.config.use_uncertainty_architecture:
                     if self.config.disable_policy_in_exploration:
                         len_logits = len(policy_logits_pool[0])
                         policy_logits_pool = [policy_logits_pool[0]] + [[1.0] * len_logits for _ in range(len(policy_logits_pool) - 1)]
