@@ -351,8 +351,8 @@ class DataWorker(object):
                             value, temperature, env = roots_values[i], _temperature[i], envs[i]
                             distributions = np.ones(self.config.action_space_size)
 
-                        # We don't want random actions in deep_sea, except for the exploiting env
-                        if 'deep_sea' in self.config.env_name:
+                        # We don't want random actions in deep_sea, unless we're not using the visit counter
+                        if 'deep_sea' in self.config.env_name and self.config.plan_with_visitation_counter:
                             distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
                             deterministic = True
 
@@ -372,11 +372,12 @@ class DataWorker(object):
 
                         if ori_reward > 0 and 'deep_sea' in self.config.env_name:
                             ori_reward = ori_reward * 10
-                            print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
-                                  f"Encountered reward: {ori_reward}. Env index is :{i}. Transition is {total_transitions}. "
-                                  f"State is: {initial_observations_for_counter[i]}, and action is: {action} \n"
-                                  f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
-                                  , flush=True)
+                            if self.config.use_visitation_counter and self.visitation_counter is not None:
+                                print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
+                                      f"Encountered reward: {ori_reward}. Env index is :{i}. Transition is {total_transitions}. "
+                                      f"State is: {initial_observations_for_counter[i]}, and action is: {action} \n"
+                                      f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
+                                      , flush=True)
 
                         if self.config.mu_explore and total_transitions % self.config.test_interval == 0:
                             try:

@@ -970,3 +970,222 @@ class EnsemblePredictionNetwork(PredictionNetwork):
         policy = self.fc_policy(policy)
 
         return policy, values
+
+class FullyConnectedEfficientZeroNet(BaseNet):
+    def __init__(self,
+                 observation_shape,
+                 action_space_size,
+                 fc_state_prediction_layers,
+                 fc_reward_layers,
+                 fc_value_layers,
+                 fc_policy_layers,
+                 fc_rnd_layers,
+                 reward_support_size,
+                 value_support_size,
+                 inverse_value_transform,
+                 inverse_reward_transform,
+                 lstm_hidden_size,
+                 momentum=0.1,
+                 proj_hid=256,
+                 proj_out=256,
+                 pred_hid=64,
+                 pred_out=256,
+                 init_zero=False,
+                 rnd_scale=1.0,
+                 ):
+        """
+            FullyConnected (or, non-resnet) EfficientZero network.
+            Parameters
+            __________
+            observation_shape: tuple or list
+                shape of observations: [C, W, H] = [1, N, N], for deep sea for which this arch. is implemented.
+
+        """
+        super(FullyConnectedEfficientZeroNet, self).__init__(inverse_value_transform, inverse_reward_transform, lstm_hidden_size)
+        self.proj_hid = proj_hid
+        self.proj_out = proj_out
+        self.pred_hid = pred_hid
+        self.pred_out = pred_out
+        self.init_zero = init_zero
+        self.action_space_size = action_space_size
+        # The size of flattened encoded state:
+        self.encoded_state_size = observation_shape[0] * observation_shape[1] * observation_shape[2]
+        # The size of the input to the dynamics network is (num_channels + the action channel) * H * W
+        self.dynamics_input_size = (observation_shape[0] + 1) * observation_shape[1] * observation_shape[2]
+        # In this arch. the representation is the original observation
+        self.representation_network = torch.nn.Identity()
+        self.policy_network = mlp(self.encoded_state_size, fc_policy_layers, action_space_size, init_zero=init_zero, momentum=momentum)
+        self.value_network = mlp(self.encoded_state_size, fc_value_layers, value_support_size, init_zero=init_zero, momentum=momentum)
+        self.dynamics_network = FullyConnectedDynamicsNetwork(
+            self.dynamics_input_size,
+            self.encoded_state_size,
+            observation_shape,
+            fc_state_prediction_layers,
+            fc_reward_layers,
+            reward_support_size,
+            lstm_hidden_size=lstm_hidden_size,
+            momentum=momentum,
+            init_zero=init_zero,
+        )
+
+        # projection
+        num_channels = 1
+        in_dim = num_channels * observation_shape[1] * observation_shape[2]
+        self.porjection_in_dim = in_dim
+        self.projection = nn.Sequential(
+            nn.Linear(self.porjection_in_dim, self.proj_hid),
+            nn.BatchNorm1d(self.proj_hid),
+            nn.ReLU(),
+            nn.Linear(self.proj_hid, self.proj_hid),
+            nn.BatchNorm1d(self.proj_hid),
+            nn.ReLU(),
+            nn.Linear(self.proj_hid, self.proj_out),
+            nn.BatchNorm1d(self.proj_out)
+        )
+        self.projection_head = nn.Sequential(
+            nn.Linear(self.proj_out, self.pred_hid),
+            nn.BatchNorm1d(self.pred_hid),
+            nn.ReLU(),
+            nn.Linear(self.pred_hid, self.pred_out),
+        )
+
+        # RND
+        self.input_size_rnd = self.encoded_state_size
+        self.rnd_scale = rnd_scale
+        # It's important that the RND nets are NOT initiated with zero
+        self.rnd_network = mlp(self.input_size_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False,
+                               momentum=momentum)
+        self.rnd_target_network = mlp(self.input_size_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False,
+                                      momentum=momentum)
+
+    def representation(self, observation):
+        # With the fully-connected deep_sea architecture, we maintain the original observation as the representation
+        encoded_state = self.representation_network(observation)
+        return encoded_state
+
+    def prediction(self, encoded_state):
+        # We reshape the encoded_state to the shape of input of the FC nets that follow
+        encoded_state = encoded_state.view(-1, self.encoded_state_size)
+        policy = self.policy_network(encoded_state)
+        value = self.value_network(encoded_state)
+        return policy, value
+
+    def dynamics(self, encoded_state, reward_hidden, action):
+        # Stack encoded_state with a game specific one hot encoded action
+        action_one_hot = (
+            torch.ones(
+                (
+                    encoded_state.shape[0],     # batch dimension
+                    1,                          # channels dimension
+                    encoded_state.shape[2],     # H dim
+                    encoded_state.shape[3],     # W dim
+                )
+            )
+            .to(action.device)
+            .float()
+        )
+        action_one_hot = (
+                action[:, :, None, None] * action_one_hot / self.action_space_size
+        )
+        x = torch.cat((encoded_state, action_one_hot), dim=1)
+        next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, reward_hidden)
+        return next_encoded_state, reward_hidden, value_prefix
+
+    def get_params_mean(self):
+        representation_mean = 0
+        dynamic_mean = self.dynamics_network.get_dynamic_mean()
+        reward_w_dist, reward_mean = self.dynamics_network.get_reward_mean()
+
+        return reward_w_dist, representation_mean, dynamic_mean, reward_mean
+
+    def project(self, hidden_state, with_grad=True):
+        # only the branch of proj + pred can share the gradients
+        hidden_state = hidden_state.view(-1, self.porjection_in_dim)
+        proj = self.projection(hidden_state)
+
+        # with grad, use proj_head
+        if with_grad:
+            proj = self.projection_head(proj)
+            return proj
+        else:
+            return proj.detach()
+
+    def compute_rnd_uncertainty(self, state):
+        state = state.view(-1, self.input_size_rnd)
+        return self.rnd_scale * torch.nn.functional.mse_loss(self.rnd_network(state),
+                                                             self.rnd_target_network(state),
+                                                             reduction='none')
+
+class FullyConnectedDynamicsNetwork(nn.Module):
+    def __init__(self,
+                 dynamics_input_size,
+                 hidden_state_size,
+                 hidden_state_shape,
+                 fc_state_prediction_layers,
+                 fc_reward_layers,
+                 full_support_size,
+                 lstm_hidden_size=64,
+                 momentum=0.1,
+                 init_zero=False,
+                 ):
+        """
+        Non-resnet, non-conv dynamics network
+        Parameters
+        __________
+        dynamics_input_size: int
+            The size of the input of hidden_state + onehot action encoding
+        hidden_state_size: int
+            The size of the hidden state flattened for FC
+        hidden_state_shape: tuple or list
+            The shape of the hidden state is expected to be in, without the batch dim, [C, H, W] = [1, N, N]
+        """
+        super().__init__()
+        self.hidden_state_shape = hidden_state_shape
+        self.dynamics_input_size = dynamics_input_size
+        self.state_prediction_net = mlp(dynamics_input_size, fc_state_prediction_layers, hidden_state_size, init_zero=init_zero,
+                                        momentum=momentum)
+        # The input to the lstm is the concat tensor of hidden_state and action
+        self.lstm = nn.LSTM(input_size=dynamics_input_size, hidden_size=lstm_hidden_size)
+        self.bn_value_prefix = nn.BatchNorm1d(lstm_hidden_size, momentum=momentum)
+        self.fc = mlp(lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero,
+                      momentum=momentum)
+
+    def forward(self, x, reward_hidden):
+        # Flatten input state-action for FC nets
+        x = x.view(-1, self.dynamics_input_size)
+
+        # Next-state prediction is done based on a FC network
+        next_state = self.state_prediction_net(x)
+        next_state = nn.functional.relu(next_state)
+        # Reshape the state to the shape MuZero expects: [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
+        next_state = next_state.view(-1,
+                                     self.hidden_state_shape[0],
+                                     self.hidden_state_shape[1],
+                                     self.hidden_state_shape[2])
+
+        # Reward prediction is done based on EfficientExplore architecture
+        x = x.unsqueeze(0)
+        value_prefix, reward_hidden = self.lstm(x, reward_hidden)
+        value_prefix = value_prefix.squeeze(0)
+        value_prefix = self.bn_value_prefix(value_prefix)
+        value_prefix = nn.functional.relu(value_prefix)
+        value_prefix = self.fc(value_prefix)
+
+        return next_state, reward_hidden, value_prefix
+
+    def get_dynamic_mean(self):
+        dynamic_mean = []
+        for name, param in self.state_prediction_net.named_parameters():
+            dynamic_mean += np.abs(param.detach().cpu().numpy().reshape(-1)).tolist()
+        dynamic_mean = sum(dynamic_mean) / len(dynamic_mean)
+        return dynamic_mean
+
+    def get_reward_mean(self):
+        for index, (name, param) in enumerate(self.fc.named_parameters()):
+            if index > 0:
+                temp_weights = param.detach().cpu().numpy().reshape(-1)
+                reward_w_dist = np.concatenate((reward_w_dist, temp_weights))
+            else:
+                reward_w_dist = param.detach().cpu().numpy().reshape(-1)
+        reward_mean = np.abs(reward_w_dist).mean()
+        return reward_w_dist, reward_mean

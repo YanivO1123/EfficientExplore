@@ -4,8 +4,7 @@ from core.config import BaseConfig
 from core.utils import make_deepsea, EpisodicLifeEnv
 from core.dataset import Transforms
 from config.deepsea.env_wrapper import DeepSeaWrapper
-from config.deepsea.model import EfficientZeroNet
-from config.deepsea.model import EfficientExploreNet
+from config.deepsea.model import EfficientZeroNet, FullyConnectedEfficientZeroNet, EfficientExploreNet
 from core.config import DiscreteSupport
 import bsuite
 from bsuite.utils import gym_wrapper
@@ -88,7 +87,10 @@ class DeepSeaConfig(BaseConfig):
         )
         self.start_transitions = max(1, self.start_transitions)
 
+        # Architecture specification
         self.bn_mt = 0.1
+
+        # Resnet arch. specs
         self.blocks = 1  # Number of blocks in the ResNet
         self.channels = 8 # 64 # Number of channels in the ResNet
         self.reduced_channels_reward = 8 # 16  # x36 Number of channels in reward head
@@ -98,7 +100,16 @@ class DeepSeaConfig(BaseConfig):
         self.resnet_fc_value_layers = [32, 32] # [32]  # Define the hidden layers in the value head of the prediction network
         self.resnet_fc_policy_layers = [32] # [32]  # Define the hidden layers in the policy head of the prediction network
         self.resnet_fc_rnd_layers = [1024, 1024, 1024, 256] # The last number is interpreted as outputsize
+        self.resnet_fc_ube_layers = [32, 32]
         self.downsample = False  # Downsample observations before representation network (See paper appendix Network Architecture)
+
+        # Fullyconnected arch. specs
+        self.fc_state_prediction_layers = [64]
+        self.fc_reward_layers = [64, 64]
+        self.fc_value_layers = [64, 64]
+        self.fc_policy_layers = [64, 64]
+        self.fc_rnd_layers = [1024, 1024, 1024, 256]
+        self.fc_lstm_hidden_size = 64
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         if self.change_temperature:
@@ -125,7 +136,29 @@ class DeepSeaConfig(BaseConfig):
         self.action_space_size = game.action_space_size
 
     def get_uniform_network(self):
-        if self.use_uncertainty_architecture:
+        if self.architecture_type == 'fully_connected':
+            return FullyConnectedEfficientZeroNet(
+                self.obs_shape,
+                self.action_space_size,
+                self.fc_state_prediction_layers,
+                self.fc_reward_layers,
+                self.fc_value_layers,
+                self.fc_policy_layers,
+                self.fc_rnd_layers,
+                self.value_support.size,
+                self.reward_support.size,
+                self.inverse_value_transform,
+                self.inverse_reward_transform,
+                self.fc_lstm_hidden_size,
+                momentum=self.bn_mt,
+                proj_hid=self.proj_hid,
+                proj_out=self.proj_out,
+                pred_hid=self.pred_hid,
+                pred_out=self.pred_out,
+                init_zero=self.init_zero,
+                rnd_scale=self.rnd_scale,
+            )
+        elif self.use_uncertainty_architecture:
             return EfficientExploreNet(
                 self.obs_shape,
                 self.action_space_size,

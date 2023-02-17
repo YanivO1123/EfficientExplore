@@ -339,6 +339,7 @@ class BaseConfig(object):
 
         ## uncertainty
         # architecture
+        self.architecture_type = 'resnet'   # Decides the architecture of the NN. 'fully_connected' is only implemented for deepsea
         self.use_uncertainty_architecture = use_uncertainty_architecture
         self.uncertainty_architecture_type = uncertainty_architecture_type
 
@@ -367,7 +368,7 @@ class BaseConfig(object):
         # Target types in exploration
         self.use_max_value_targets = use_max_value_targets
         self.use_max_policy_targets = use_max_policy_targets
-        
+
         # Deep sea for debugging
         self.deepsea_randomize_actions = True
 
@@ -520,6 +521,12 @@ class BaseConfig(object):
                 self.plan_with_state_visits = args.plan_w_state_visits
         self.use_uncertainty_architecture = args.uncertainty_architecture
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
+        if args.case == 'deep_sea':
+            self.architecture_type = args.architecture_type
+        else:
+            self.architecture_type = 'resnet'
+        if self.architecture_type == 'fully_connected':
+            self.uncertainty_architecture_type = 'rnd'
         # MuExplore is only applicable with some uncertainty mechanism
         assert (args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter)) or (not args.mu_explore)
         self.mu_explore = args.mu_explore and (self.use_uncertainty_architecture or self.use_visitation_counter)
