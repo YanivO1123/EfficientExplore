@@ -30,7 +30,7 @@ class DeepSeaConfig(BaseConfig):
             value_delta_max=0.01,
             num_simulations=50,
             batch_size=64,  # 32 # 64 #256,  # TODO: can be larger with smaller net
-            td_steps=3,     # 5, 10
+            td_steps=5,     # 5, 10
             num_actors=1,
             # network initialization/ & normalization
             episode_life=False, # This uses properties of real gym
@@ -53,10 +53,10 @@ class DeepSeaConfig(BaseConfig):
             do_consistency=True,
             # frame skip & stack observation
             frame_skip=1,      # TODO: I believe this is skipping * 1
-            stacked_observations=1, # 4 2
+            stacked_observations=1,     # 4 2
             # coefficient
             reward_loss_coeff=1,
-            value_loss_coeff=1, # 0.25,
+            value_loss_coeff=0.25,  # 0.25 original # 1
             policy_loss_coeff=1,
             consistency_coeff=2,
             # reward sum

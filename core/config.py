@@ -538,13 +538,9 @@ class BaseConfig(object):
         if args.number_of_exploratory_envs is not None:
             assert args.number_of_exploratory_envs <= self.p_mcts_num
             self.number_of_exploratory_envs = args.number_of_exploratory_envs
-        if args.use_max_value_targets and self.mu_explore:
-            self.use_max_value_targets = args.use_max_value_targets
-            self.use_max_policy_targets = self.use_max_value_targets and args.use_max_value_targets
-        else:
-            self.use_max_value_targets = False
-            self.use_max_policy_targets = False
-        # Else, uses use_max_value_targets from the config
+        # Max value and policy targets can be used independently, but only with mu_explore
+        self.use_max_value_targets = args.use_max_value_targets and self.mu_explore
+        self.use_max_policy_targets = args.use_max_policy_targets and self.mu_explore
 
         if not self.do_consistency:
             self.consistency_coeff = 0

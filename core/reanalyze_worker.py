@@ -162,13 +162,9 @@ class BatchWorker_CPU(object):
                 else:
                     value_mask.append(0)
                     obs = zero_obs
-                    # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
 
-                #TODO: MuExplore: if the bootstrap_index is outside of the trajectory, but not for 0-step values, in
-                # principle I need to compute the 0-step value. However, this can induce ignoring terminals, which is
-                # really dangerous, so instead I'm leaving this as is
+                # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
                 if bootstrap_index - td_steps < traj_len:
-                    # MuExplore: Prepare the observations for bootstrapped values o_{t+0}, for max_targets
                     zero_step_obs = current_value_game_obs[beg_index:end_index]
                     zero_step_value_mask.append(1)
                 else:
@@ -301,7 +297,7 @@ class BatchWorker_CPU(object):
         total_transitions = ray.get(self.replay_buffer.get_total_len.remote())
 
         # obtain the context of value targets
-        if self.config.use_max_value_targets:
+        if self.config.use_max_value_targets or self.config.use_max_policy_targets:
             # If uses max targets, the context contains two more things: episode type, and observations to compute 0-step values
             reward_value_context = self._prepare_reward_value_context_w_max_targets(indices_lst, game_lst, game_pos_lst,
                                                                       total_transitions)
@@ -511,7 +507,7 @@ class BatchWorker_GPU(object):
             The function _prepare_reward_value_max_targets() is only compatible with reward_value_context that has been
                 prepared by the function _prepare_reward_value_context_w_max_targets()
         """
-        value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst, zero_step_value_mask  = reward_value_context
+        value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst, zero_step_value_mask = reward_value_context
         value_obs_lst = ray.get(value_obs_lst)
         zero_step_value_obs_lst = ray.get(zero_step_value_obs_lst)
         device = self.config.device
@@ -611,7 +607,10 @@ class BatchWorker_GPU(object):
 
                     if current_index < traj_len_non_re:
                         # MuExplore: Max targets:
-                        if value_lst[value_index] < value_lst_zero_step[value_index] and exploration_episode:
+                        # If the 0-step target > n-step target, AND we want to use max_value_targets
+                        # and not only max_policy_targets, append the 0-step target
+                        if value_lst[value_index] < value_lst_zero_step[value_index] and exploration_episode and \
+                                self.config.use_max_value_targets:
                             target_values.append(value_lst_zero_step[value_index])
                         else:
                             target_values.append(value_lst[value_index])
@@ -695,8 +694,7 @@ class BatchWorker_GPU(object):
                         target_policies.append([0 for _ in range(self.config.action_space_size)])
                     else:
                         # game.store_search_stats(distributions, value, current_index)
-                        #TODO: Verify the indexing of max_target
-                        # If this was an n-step target AND an exploration episode, DO NOT use the reanlyzed policy target
+                        # MuExplore: If this was an n-step target AND an exploration episode, DO NOT use the reanlyzed policy target
                         if max_targets[enumerate_index][current_index - state_index] == 1:
                             target_policies.append(child_visits[enumerate_index][current_index])
                         else:
@@ -814,7 +812,7 @@ class BatchWorker_GPU(object):
                 self.model.eval()
 
             # target reward, value
-            if self.config.use_max_value_targets:
+            if self.config.use_max_value_targets or self.config.use_max_policy_targets:
                 batch_value_prefixs, batch_values, max_targets = self._prepare_reward_value_max_targets(reward_value_context)
             else:
                 batch_value_prefixs, batch_values = self._prepare_reward_value(reward_value_context)
