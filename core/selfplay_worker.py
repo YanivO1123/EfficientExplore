@@ -154,7 +154,7 @@ class DataWorker(object):
                 dones = np.array([False for _ in range(env_nums)])
                 game_histories = [GameHistory(envs[i].env.action_space, max_length=self.config.history_length,
                                               config=self.config,
-                                              exploration_episode=(i < exploit_env_nums and self.config.mu_explore))
+                                              exploration_episode=(i >= exploit_env_nums and self.config.mu_explore))
                                   for i in range(env_nums)]
                 last_game_histories = [None for _ in range(env_nums)]
                 last_game_priorities = [None for _ in range(env_nums)]
@@ -264,7 +264,7 @@ class DataWorker(object):
                             init_obs = envs[i].reset()
                             game_histories[i] = GameHistory(env.env.action_space, max_length=self.config.history_length,
                                                             config=self.config,
-                                                            exploration_episode=(i < exploit_env_nums and self.config.mu_explore))
+                                                            exploration_episode=(i >= exploit_env_nums and self.config.mu_explore))
                             last_game_histories[i] = None
                             last_game_priorities[i] = None
                             stack_obs_windows[i] = [init_obs for _ in range(self.config.stacked_observations)]
@@ -452,7 +452,7 @@ class DataWorker(object):
                             # new block trajectory
                             game_histories[i] = GameHistory(envs[i].env.action_space, max_length=self.config.history_length,
                                                             config=self.config,
-                                                            exploration_episode=(i < exploit_env_nums and self.config.mu_explore))
+                                                            exploration_episode=(i >= exploit_env_nums and self.config.mu_explore))
                             game_histories[i].init(stack_obs_windows[i])
 
                 for i in range(env_nums):
