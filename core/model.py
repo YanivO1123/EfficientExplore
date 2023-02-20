@@ -28,6 +28,21 @@ def concat_output_value(output_lst):
 
     return value_lst
 
+def concat_output_value_uncertainty(output_lst):
+    # concat the values of the model output list
+    value_uncertainty_lst = []
+    for output in output_lst:
+        value_uncertainty_lst.append(output.value_variance)
+    value_uncertainty_lst = np.concatenate(value_uncertainty_lst)
+    return value_uncertainty_lst
+
+def concat_output_reward_uncertainty(output_lst):
+    # concat the values of the model output list
+    reward_uncertainty_lst = []
+    for output in output_lst:
+        reward_uncertainty_lst.append(output.value_prefix_variance)
+    reward_uncertainty_lst = np.concatenate(reward_uncertainty_lst)
+    return reward_uncertainty_lst
 
 def concat_output(output_lst):
     #TODO: This is used by reanalyze to compute fresh predictions. In reanlyze, in basic MuExplore,
@@ -105,8 +120,14 @@ class BaseNet(nn.Module):
         actor_logit, value = self.prediction(state)
         value_variance = None
         value_prefix_variance = None
-        if self.uncertainty_type == 'rnd_ube' or self.uncertainty_type == 'ensemble_ube':
+        if self.uncertainty_type == 'ensemble_ube':
             value_variance = self.compute_ube_uncertainty(state.detach())
+        if self.uncertainty_type == 'rnd_ube':
+            # When we use RND, the targets for UBE are the UBE prediction (to achieve reliable propagation)
+            # as well as the RND prediction (to achieve reliable sensitivity to new inputs)
+            value_variance = self.compute_ube_uncertainty(state.detach()) + \
+                             self.compute_rnd_uncertainty(state.detach()).detach()
+            value_prefix_variance = self.compute_rnd_uncertainty(state.detach()).detach()
 
         if not self.training:
             #MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
@@ -139,8 +160,13 @@ class BaseNet(nn.Module):
         value_variance = None
         value_prefix_variance = None
 
-        if self.uncertainty_type == 'rnd_ube' or self.uncertainty_type == 'ensemble_ube':
+        if self.uncertainty_type == 'ensemble_ube':
             value_variance = self.compute_ube_uncertainty(state.detach())
+        if self.uncertainty_type == 'rnd_ube':
+            # When we use RND, the targets for UBE are the UBE prediction (to achieve reliable propagation)
+            # as well as the RND prediction (to achieve reliable sensitivity to new inputs)
+            value_variance = self.compute_ube_uncertainty(state.detach()) + \
+                             self.compute_rnd_uncertainty(state.detach()).detach()
 
         if not self.training:
             # MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
@@ -152,9 +178,17 @@ class BaseNet(nn.Module):
             elif self.uncertainty_type == 'rnd':
                 value_variance = self.compute_rnd_uncertainty(state.detach()).detach().cpu().numpy()
                 value_prefix_variance = self.compute_rnd_uncertainty(state.detach())
-            elif self.uncertainty_type == 'rnd_ube' or self.uncertainty_type == 'ensemble_ube':
-                value_variance = self.compute_ube_uncertainty(state.detach()).detach().cpu().numpy()
+            elif self.uncertainty_type == 'rnd_ube':
+                value_variance = self.compute_ube_uncertainty(state.detach()).detach().cpu().numpy() + self.compute_rnd_uncertainty(state.detach()).detach().cpu().numpy()
                 value_prefix_variance = self.compute_rnd_uncertainty(state.detach()).detach().cpu().numpy()
+            elif self.uncertainty_type == 'ensemble_ube':
+                if isinstance(value, list):  # If the ensemble arch. is used
+                    value_variance = self.ensemble_prediction_to_variance(value).detach().cpu().numpy()
+                    value_variance += self.compute_ube_uncertainty(state.detach()).detach().cpu().numpy()
+                else:
+                    value_variance = self.compute_ube_uncertainty(state.detach()).detach().cpu().numpy()
+                if isinstance(value_prefix, list):  # If the ensemble arch. is used
+                    value_prefix_variance = self.ensemble_prediction_to_variance(value_prefix).detach().cpu().numpy()
 
             # if not in training, obtain the scalars of the value/reward
             value = self.inverse_value_transform(value).detach().cpu().numpy()

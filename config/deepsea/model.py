@@ -607,6 +607,7 @@ class EfficientExploreNet(EfficientZeroNet):
                  fc_value_layers,
                  fc_policy_layers,
                  fc_rnd_layers,
+                 fc_ube_layers,
                  reward_support_size,
                  value_support_size,
                  downsample,
@@ -732,12 +733,19 @@ class EfficientExploreNet(EfficientZeroNet):
             self.rnd_target_network = mlp(self.input_size_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False, momentum=bn_mt)
 
         if self.uncertainty_type == 'ensemble_ube' or self.uncertainty_type == 'rnd_ube':
+            self.input_size_ube = (
+                (
+                        num_channels
+                        * math.ceil(observation_shape[1] / 16)
+                        * math.ceil(observation_shape[2] / 16)
+                )
+                if downsample
+                else (num_channels * observation_shape[1] * observation_shape[2])
+            )
             self.use_ube = True
-            self.ube_network = None
-            raise NotImplementedError
+            # The output of UBE is one number: the uncertainty for the (state) input
+            self.ube_network = mlp(self.input_size_ube, fc_ube_layers, 1, init_zero=False, momentum=bn_mt)
 
-
-    #TODO: Complete this function, and move it because it probably doesnt belong here.
     def ensemble_prediction_to_variance(self, logits):
         if not isinstance(logits, list):
             return None
@@ -760,10 +768,9 @@ class EfficientExploreNet(EfficientZeroNet):
 
             return scalar_variance
 
-    # TODO: Complete the UBE prediction computation
-    def ube(self, encoded_state, action):
+    def compute_ube_uncertainty(self, encoded_state):
         # I need to decide if UBE takes encoded_state or encoded_state and action
-        return NotImplementedError
+        return self.ube_network(encoded_state)
 
     def compute_rnd_uncertainty(self, state):
         state = state.view(-1, self.input_size_rnd)

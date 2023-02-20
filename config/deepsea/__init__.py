@@ -171,6 +171,7 @@ class DeepSeaConfig(BaseConfig):
                 self.resnet_fc_value_layers,
                 self.resnet_fc_policy_layers,
                 self.resnet_fc_rnd_layers,
+                self.resnet_fc_ube_layers,
                 self.reward_support.size,
                 self.value_support.size,
                 self.downsample,

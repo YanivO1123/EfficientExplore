@@ -43,6 +43,8 @@ def _log(config, step_count, log_data, model, replay_buffer, lr, shared_storage,
     if summary_writer is not None:
         if config.debug:
             for name, W in model.named_parameters():
+                if not W.grad:
+                    print(f"detected unused parameter: {name}")
                 summary_writer.add_histogram('after_grad_clip' + '/' + name + '_grad', W.grad.data.cpu().numpy(),
                                              step_count)
                 summary_writer.add_histogram('network_weights' + '/' + name, W.data.cpu().numpy(), step_count)

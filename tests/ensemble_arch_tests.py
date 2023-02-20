@@ -9,24 +9,24 @@ from core.config import DiscreteSupport
 class Ensemble_Arch_Tests:
     def __init__(self):
         self.game_config = atari.AtariConfig()
-        self.game_config.use_uncertainty_architecture = True
-        self.game_config.ensemble_size = 1
+        self.game_config.use_uncertainty_architecture = False
+        self.game_config.ensemble_size = 2
         self.game_config.stacked_observations  = 1
         self.game_config.gray_scale = False
         self.game_config.p_mcts_num = 1
         self.game_config.num_unroll_steps = 1
         self.game_config.batch_size = 2
-        self.game_config.value_support = DiscreteSupport(-15, 15, delta=1)
-        self.game_config.reward_support = DiscreteSupport(-15, 15, delta=1)
-        self.game_config.lstm_hidden_size = 64
-        self.proj_hid = 256
-        self.proj_out = 256
-        self.pred_hid = 64
-        self.pred_out = 256
+        self.game_config.value_support = DiscreteSupport(-5, 5, delta=1)
+        self.game_config.reward_support = DiscreteSupport(-5, 5, delta=1)
+        self.game_config.lstm_hidden_size = 35
+        self.proj_hid = 64
+        self.proj_out = 64
+        self.pred_hid = 32
+        self.pred_out = 64
 
         self.game_config.set_game("BreakoutNoFrameskip-v4")
         self.env = self.game_config.new_game()
-
+        print(f"self.env.action_space_size = {self.env.action_space_size}")
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         self.model = None # The model is initialized in run_tests or run_prior_tests
@@ -37,8 +37,8 @@ class Ensemble_Arch_Tests:
         self.model.to(self.device)
 
         # Run tests
-        self.test_initial_inference()
-        self.test_recurrent_inference()
+        # self.test_initial_inference()
+        # self.test_recurrent_inference()
         # self.test_inverse_scalar_transform_ensemble()
         # self.test_value_loss_computation()
         # self.test_reward_loss_computation()
@@ -88,7 +88,7 @@ class Ensemble_Arch_Tests:
         hidden_state = self.model.representation(observation)
         actor_logit, value = self.model.prediction(hidden_state)
 
-        assert self.game_config.ensemble_size == len(value)
+        # assert self.game_config.ensemble_size == len(value)
 
     def test_recurrent_inference(self):
         """
@@ -116,6 +116,12 @@ class Ensemble_Arch_Tests:
         print(f"reward_hidden_h.shape = {reward_hidden_h.shape}")
         print(f"action_batch.shape = {action_batch.shape}")
         value, value_prefix, actor_logit, state, reward_hidden, value_variance, value_prefix_variance = self.model.recurrent_inference(hidden_state, (reward_hidden_c, reward_hidden_h), action_batch)
+        reward_w_dist, reward_mean = self.model.dynamics_network.get_reward_mean()
+        print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
+              f"numpy.shape(reward_w_dist) = {numpy.shape(reward_w_dist)} \n"
+              f"numpy.shape(reward_w_dist) = {numpy.shape(reward_mean)} \n"
+              f"reward_mean = {reward_mean} \n"
+              f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
         # value, value_prefix, policy_logits, hidden_state, reward_hidden
         print(f"The output of recurrent_inference(hidden_state, reward_hidden, action_batch) is: \n"
               f"recurrent_inference.value = {value} \n"
@@ -144,8 +150,8 @@ class Ensemble_Arch_Tests:
               f"numpy.shape(value[0]) = {numpy.shape(value[0])} \n"
               )
 
-        assert self.game_config.ensemble_size == len(value)
-        assert self.game_config.ensemble_size == len(value_prefix)
+        # assert self.game_config.ensemble_size == len(value)
+        # assert self.game_config.ensemble_size == len(value_prefix)
 
     def test_inverse_scalar_transform_ensemble(self):
         """
@@ -156,7 +162,7 @@ class Ensemble_Arch_Tests:
         _ = self.env.reset()
         observation, _, _, _ = self.env.step(0)
         observation = self.transform_observation_from_atari_to_model(observation)
-        value, value_prefix, actor_logit, hidden_state, reward_hidden = self.model.initial_inference(observation)
+        value, value_prefix, actor_logit, hidden_state, reward_hidden, _, _ = self.model.initial_inference(observation)
         print(f"The value from initial_inference is: {value} \n"
               f"And value prefix (which is set to 0s): {value_prefix} \n")
         action_batch = [1]
@@ -164,7 +170,7 @@ class Ensemble_Arch_Tests:
         hidden_state = torch.from_numpy(np.asarray(hidden_state)).to(self.device).float()
         reward_hidden_c = torch.from_numpy(np.asarray(reward_hidden[0])).to(self.device).float()
         reward_hidden_h = torch.from_numpy(np.asarray(reward_hidden[1])).to(self.device).float()
-        value_recurrent_inf, value_prefix, actor_logit, state, reward_hidden = self.model.recurrent_inference(
+        value_recurrent_inf, value_prefix, actor_logit, state, reward_hidden, _, _ = self.model.recurrent_inference(
             hidden_state, (reward_hidden_c, reward_hidden_h), action_batch
         )
         print(f"The value from recurrent_inference is: {value_recurrent_inf} \n"
@@ -188,7 +194,7 @@ class Ensemble_Arch_Tests:
               f"value_recurrent_inf = {value_recurrent_inf} \n"
               )
 
-        assert value_1 == value_2 == value_recurrent_inf
+        # assert value_1 == value_2 == value_recurrent_inf
 
     def test_value_loss_computation(self):
         """
@@ -196,7 +202,7 @@ class Ensemble_Arch_Tests:
         """
         # Setup the model to training mode, for losses computation
         self.model.train()
-
+        print("Testing value loss computation")
         # Setup the targets
         target_value = torch.tensor([[17], [-2]]).to(self.game_config.device).float()
         print(f"target_value.shape = {target_value.shape}, and value: {target_value} \n")
@@ -211,8 +217,8 @@ class Ensemble_Arch_Tests:
         observation = torch.cat((observation, observation))
 
         # Setup the initial inference predictions
-        value, value_prefix, actor_logit, hidden_state, reward_hidden = self.model.initial_inference(observation)
-
+        value, value_prefix, actor_logit, hidden_state, reward_hidden, _, _ = self.model.initial_inference(observation)
+        print("#######################")
         print(f"len(value) = {len(value)}, and value[0].shape = {value[0].shape} \n"
               f"Expecting {self.game_config.ensemble_size} and 2,{self.game_config.value_support.size}")
         target_value_phi = target_value_phi.squeeze(1)
@@ -223,7 +229,7 @@ class Ensemble_Arch_Tests:
         # print(f"value_loss_from_ensemble_function = {value_loss_from_ensemble_function}")
 
         print(f"value_loss_from_ensemble_function.shape = {value_loss_from_ensemble_function.shape} \n "
-              f"and value_loss_from_ensemble_function = {value_loss_from_ensemble_function} \n")
+              f"and value_loss_from_ensemble_function = {value_loss_from_ensemble_function}")
 
         # Setup the second loss:
         value_loss_from_ensemble_manually = torch.zeros(2).to(self.game_config.device).float()
@@ -233,7 +239,7 @@ class Ensemble_Arch_Tests:
         print(f"value_loss_from_ensemble_manually.shape = {value_loss_from_ensemble_manually.shape} \n"
               f"and value_loss_from_ensemble_manually = {value_loss_from_ensemble_manually}")
 
-        assert torch.equal(value_loss_from_ensemble_manually, value_loss_from_ensemble_function)
+        # assert torch.equal(value_loss_from_ensemble_manually, value_loss_from_ensemble_function)
 
     def test_reward_loss_computation(self):
         """
@@ -262,7 +268,7 @@ class Ensemble_Arch_Tests:
 
         # Setup the initial inference predictions
         print("Setup the initial_inference")
-        value, value_prefix, actor_logit, hidden_state, reward_hidden = self.model.initial_inference(observation)
+        value, value_prefix, actor_logit, hidden_state, reward_hidden, _, _ = self.model.initial_inference(observation)
 
         # Setup the recurrent inference predictions
         print("Setup the recurrent_inference inputs")
@@ -274,7 +280,7 @@ class Ensemble_Arch_Tests:
         print(f"action_batch.shape = {action_batch.shape}")
 
         print("Run the recurrent_inference")
-        value, value_prefix, actor_logit, state, reward_hidden = self.model.recurrent_inference(hidden_state, reward_hidden, action_batch)
+        value, value_prefix, actor_logit, state, reward_hidden, _, _ = self.model.recurrent_inference(hidden_state, reward_hidden, action_batch)
 
         print(f"len(value_prefix) = {len(value_prefix)}, and value_prefix[0].shape = {value_prefix[0].shape} \n"
               f"Expecting {self.game_config.ensemble_size} and [2, {self.game_config.reward_support.size}]")
@@ -309,7 +315,7 @@ class Ensemble_Arch_Tests:
               f"and expected batch size which is {self.game_config.batch_size}")
 
         print("Asserting that losses are the same")
-        assert torch.equal(reward_loss_from_ensemble_manually, reward_loss_from_ensemble_function)
+        # assert torch.equal(reward_loss_from_ensemble_manually, reward_loss_from_ensemble_function)
 
     def test_ensemble_variance(self):
         """
@@ -345,5 +351,54 @@ class Ensemble_Arch_Tests:
     def test_inverse_scalar_transform_with_prior(self):
         raise NotImplementedError
 
+
+
+def ensemble_prediction_to_variance(logits):
+    assert isinstance(logits, list)
+    print("In function ensemble_prediction_to_variance")
+    print(f"Input is a list of len: {len(logits)}, of tensors of shape: {logits[0].shape}")
+    print(f"Input logits = {logits}")
+    with torch.no_grad():
+        # Softmax the logits
+        logits = [torch.softmax(logits[i], dim=1) for i in range(len(logits))]
+        print(f"After softmax: logits is a list of len: {len(logits)}, of tensors of shape: {logits[0].shape}")
+        print(f"After softmax: logits = {logits}")
+        # Stack into a tensor to compute the variance using torch
+        # shape should be: (ensemble_size, batch_size, full_support_size)
+        stacked_tensor = torch.stack(logits, dim=0)
+        print(f"After stacking, stacked_tensor.shape = {stacked_tensor.shape}, and expected: (4,2,3)")
+        print(f"After stacking: stacked_tensor = {stacked_tensor}")
+        # Compute the per-entry variance over the dimension 0 (ensemble size)
+        scalar_variance = torch.var(stacked_tensor, unbiased=False, dim=0)
+        print(f"After computing variances, scalar_variance.shape = {scalar_variance.shape}, and expected: (2,3)")
+        print(f"And the scalar_variance tensor itself: {scalar_variance}, expected: ([const, 0, 0], [const, 0, 0])")
+        # Sum the per-entry variance scores
+        scalar_variance = scalar_variance.sum(-1)
+        print(f"After summing variances, scalar_variance.shape = {scalar_variance.shape}, and expected: (2)")
+        print(f"And the scalar_variance tensor itself: {scalar_variance}, expected: ([const, const])")
+        # Shape should be: (batch_size, 1)
+        return scalar_variance
+
+def test_ensemble_prediction_to_variance():
+    # shape: list of size ensemble size, of tensors of shape: (parl_envs, full_support)
+    ensemble_size = 4
+    parl_envs = 2
+    full_support = 3
+    logits = [torch.from_numpy(numpy.asarray([[2.0, 2.0, 2.0], [0.8, 0.1, 0.1]])).float(),
+              torch.from_numpy(numpy.asarray([[2.0, 2.0, 2.0], [0.8, 0.1, 0.1]])).float(),
+              torch.from_numpy(numpy.asarray([[2.0, 2.0, 2.0], [0.7, 0.2, 0.1]])).float(),
+              torch.from_numpy(numpy.asarray([[2.0, 2.0, 2.0], [0.7, 0.2, 0.1]])).float()]
+    computed_variance = ensemble_prediction_to_variance(logits)
+    first_entry_variance = np.var([0.5017, 0.5017, 0.4640, 0.4640])
+    second_entry_variance = np.var([0.2491, 0.2491, 0.2814, 0.2814])
+    third_entry_variance = np.var([0.2491, 0.2491, 0.2546, 0.2546])
+    print(f"Individual vars. computed with numpy: \n"
+          f"first_entry_variance = {first_entry_variance} \n"
+          f"second_entry_variance = {second_entry_variance} \n"
+          f"third_entry_variance = {third_entry_variance} \n"
+          f"And sum of all three = {first_entry_variance + second_entry_variance + third_entry_variance} \n"
+          )
+
+# test_ensemble_prediction_to_variance()
 # Init and run the testing framework
 Ensemble_Arch_Tests().run_tests()

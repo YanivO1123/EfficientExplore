@@ -7,7 +7,7 @@ import core.ctree.cytree as cytree
 
 from torch.cuda.amp import autocast as autocast
 from core.mcts import MCTS
-from core.model import concat_output, concat_output_value
+from core.model import concat_output, concat_output_value, concat_output_value_uncertainty, concat_output_reward_uncertainty
 from core.utils import prepare_observation_lst, LinearSchedule
 
 import traceback
@@ -619,6 +619,23 @@ class BatchWorker_GPU(object):
                             targets_values_types.append(1)  # this was an n-step EXPLORATORY target
                         else:
                             targets_values_types.append(0)  # this was any other kind of target
+
+                        # if exploration_episode:
+                        #     # If state is along diagonal, locaton is > 5, and target is < 1, print
+                        #     state = zero_step_value_obs_lst[value_index][-1, :, :]
+                        #     row, column = self.visitation_counter.from_one_hot_state_to_indexes(state)
+                        #     if row == column and row > 5 and target_values[-1] < 1:
+                        #         print(
+                        #             f"current_index = {current_index}, value_index = {value_index}, state_index = {state_index}, exploration_episode = {exploration_episode} \n"
+                        #             f"n-step value target = {value_lst[value_index]}, 0-step value target = {value_lst_zero_step[value_index]} \n"
+                        #             f"Max targets store = {targets_values_types[-1]} and expecting {1 if value_lst[value_index] > value_lst_zero_step[value_index] else 0} \n"
+                        #             f"State = {(row, column)} \n"
+                        #             )
+                            # print(f"current_index = {current_index}, value_index = {value_index}, state_index = {state_index}, exploration_episode = {exploration_episode} \n"
+                            #       f"n-step value target = {value_lst[value_index]}, 0-step value target = {value_lst_zero_step[value_index]} \n"
+                            #       f"Max targets store = {targets_values_types[-1]} and expecting {1 if value_lst[value_index] > value_lst_zero_step[value_index] else 0} \n"
+                            #       f"State = {zero_step_value_obs_lst[value_index][-1, :, :]} \n"
+                            #       )
                         # Since the horizon is small and the discount is close to 1.
                         # Compute the reward sum to approximate the value prefix for simplification
                         value_prefix += reward_lst[current_index]  # * config.discount ** (current_index - base_index)
@@ -637,6 +654,173 @@ class BatchWorker_GPU(object):
         batch_values = np.asarray(batch_values)
         batch_value_target_types = np.asarray(batch_value_target_types)
         return batch_value_prefixs, batch_values, batch_value_target_types
+
+    def _prepare_reward_uncertainty(self):
+        raise NotImplementedError
+
+    def _prepare_reward_value_ube_max_targets(self, reward_value_context):
+        """
+            prepare reward and max-value targets from the context of rewards and values.
+            The max-value target is computed as follows: max(n_step_value, 0_step_value).
+            The max target is only used in exploration episodes.
+            The function _prepare_reward_value_max_targets() is only compatible with reward_value_context that has been
+                prepared by the function _prepare_reward_value_context_w_max_targets()
+        """
+        value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst, exploration_episodes, zero_step_value_obs_lst, zero_step_value_mask  = reward_value_context
+        value_obs_lst = ray.get(value_obs_lst)
+        zero_step_value_obs_lst = ray.get(zero_step_value_obs_lst)
+        device = self.config.device
+        batch_size = len(value_obs_lst)
+
+        batch_values, batch_value_prefixs, batch_value_target_types, batch_ube_targets = [], [], [], []
+        with torch.no_grad():
+            value_obs_lst = prepare_observation_lst(value_obs_lst)
+            zero_step_value_obs_lst = prepare_observation_lst(zero_step_value_obs_lst)
+            # split a full batch into slices of mini_infer_size: to save the GPU memory for more GPU actors
+            m_batch = self.config.mini_infer_size
+            slices = np.ceil(batch_size / m_batch).astype(np.int_)
+            network_output = []
+            network_output_zero_step = []
+            for i in range(slices):
+                beg_index = m_batch * i
+                end_index = m_batch * (i + 1)
+                m_obs = torch.from_numpy(value_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                m_obs_zero_step = torch.from_numpy(zero_step_value_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                if self.config.amp_type == 'torch_amp':
+                    with autocast():
+                        m_output = self.model.initial_inference(m_obs)
+                        m_zero_step = self.model.initial_inference(m_obs_zero_step)
+                else:
+                    m_output = self.model.initial_inference(m_obs)
+                    m_zero_step = self.model.initial_inference(m_obs_zero_step)
+                network_output.append(m_output)
+                network_output_zero_step.append(m_zero_step)
+
+            # concat the output slices after model inference
+            if self.config.use_root_value:
+                # use the root values from MCTS
+                # the root values have limited improvement but require much more GPU actors;
+                _, value_prefix_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_output(network_output)
+                value_prefix_pool = value_prefix_pool.squeeze().tolist()
+                policy_logits_pool = policy_logits_pool.tolist()
+                roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations)
+                noises = [np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(np.float32).tolist() for _ in range(batch_size)]
+                # TODO: Do I really want to create NOISY roots as targets?
+                roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool, policy_logits_pool)
+                MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots)
+                roots_values = roots.get_values()
+                value_lst = np.array(roots_values)
+
+                # MuExplore: Do the same for zero_step_value:
+                _, value_prefix_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_output(
+                    network_output_zero_step)
+                value_prefix_pool = value_prefix_pool.squeeze().tolist()
+                policy_logits_pool = policy_logits_pool.tolist()
+                roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations)
+                noises = [
+                    np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
+                        np.float32).tolist() for _ in range(batch_size)]
+                # TODO: Do I really want to create NOISY roots as targets?
+                roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool, policy_logits_pool)
+                MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots)
+                roots_values = roots.get_values()
+                value_lst_zero_step = np.array(roots_values)
+            else:
+                # use the predicted values
+                value_lst = concat_output_value(network_output)
+                value_lst_zero_step = concat_output_value(network_output_zero_step)
+
+            # TODO: Technically, UBE can also get targets from the root of a tree! requires reworking the C code
+            ube_lst = concat_output_value_uncertainty(network_output)
+            ube_lst_zero_step = concat_output_value_uncertainty(network_output_zero_step)
+
+            # TODO: With this construction, the rest of the UBE target (the reward-uncertainty-trajectory) can be predicted in train
+            reward_uncertainties_lst = self._prepare_reward_uncertainty()
+
+            # get last state value
+            value_lst = value_lst.reshape(-1) * (np.array([self.config.discount for _ in range(batch_size)]) ** td_steps_lst)
+            value_lst = value_lst * np.array(value_mask)
+            value_lst = value_lst.tolist()
+
+            # MuExplore: set the 0-step values to the same format
+            value_lst_zero_step = value_lst_zero_step.reshape(-1)   # This is a 0-step target, there's no need to discount
+            value_lst_zero_step = value_lst_zero_step * np.array(zero_step_value_mask)
+            value_lst_zero_step = value_lst_zero_step.tolist()
+
+            value_index = 0
+            for traj_len_non_re, reward_lst, state_index, exploration_episode in zip(traj_lens, rewards_lst, state_index_lst, exploration_episodes):
+                # traj_len = len(game)
+                target_values = []
+                target_value_prefixs = []
+                # Logs whether this target is n-step EXPLORATORY target (1) or any other target - 0-step exploratory or n-step regular (0)
+                targets_values_types = []
+                target_ubes = []
+
+                horizon_id = 0
+                value_prefix = 0.0
+                base_index = state_index
+
+                for current_index in range(state_index, state_index + self.config.num_unroll_steps + 1):
+                    bootstrap_index = current_index + td_steps_lst[value_index]
+                    # for i, reward in enumerate(game.rewards[current_index:bootstrap_index]):
+                    for i, reward in enumerate(reward_lst[current_index:bootstrap_index]):
+                        value_lst[value_index] += reward * self.config.discount ** i
+
+                    # reset every lstm_horizon_len
+                    if horizon_id % self.config.lstm_horizon_len == 0:
+                        value_prefix = 0.0
+                        base_index = current_index
+                    horizon_id += 1
+
+                    if current_index < traj_len_non_re:
+                        # MuExplore: Max targets:
+                        if value_lst[value_index] < value_lst_zero_step[value_index] and exploration_episode:
+                            target_values.append(value_lst_zero_step[value_index])
+                            target_ubes.append(ube_lst_zero_step[value_index])
+                        else:
+                            target_values.append(value_lst[value_index])
+                            target_ubes.append(ube_lst[value_index])
+                        # If this was an n-step EXPLORATORY target, append 1
+                        if value_lst[value_index] > value_lst_zero_step[value_index] and exploration_episode:
+                            targets_values_types.append(1)  # this was an n-step EXPLORATORY target
+                        else:
+                            targets_values_types.append(0)  # this was any other kind of target
+
+                        # if exploration_episode:
+                        #     # If state is along diagonal, locaton is > 5, and target is < 1, print
+                        #     state = zero_step_value_obs_lst[value_index][-1, :, :]
+                        #     row, column = self.visitation_counter.from_one_hot_state_to_indexes(state)
+                        #     if row == column and row > 5 and target_values[-1] < 1:
+                        #         print(
+                        #             f"current_index = {current_index}, value_index = {value_index}, state_index = {state_index}, exploration_episode = {exploration_episode} \n"
+                        #             f"n-step value target = {value_lst[value_index]}, 0-step value target = {value_lst_zero_step[value_index]} \n"
+                        #             f"Max targets store = {targets_values_types[-1]} and expecting {1 if value_lst[value_index] > value_lst_zero_step[value_index] else 0} \n"
+                        #             f"State = {(row, column)} \n"
+                        #             )
+                            # print(f"current_index = {current_index}, value_index = {value_index}, state_index = {state_index}, exploration_episode = {exploration_episode} \n"
+                            #       f"n-step value target = {value_lst[value_index]}, 0-step value target = {value_lst_zero_step[value_index]} \n"
+                            #       f"Max targets store = {targets_values_types[-1]} and expecting {1 if value_lst[value_index] > value_lst_zero_step[value_index] else 0} \n"
+                            #       f"State = {zero_step_value_obs_lst[value_index][-1, :, :]} \n"
+                            #       )
+                        # Since the horizon is small and the discount is close to 1.
+                        # Compute the reward sum to approximate the value prefix for simplification
+                        value_prefix += reward_lst[current_index]  # * config.discount ** (current_index - base_index)
+                        target_value_prefixs.append(value_prefix)
+                    else:
+                        target_values.append(0)
+                        target_value_prefixs.append(value_prefix)
+                        targets_values_types.append(0)
+                    value_index += 1
+
+                batch_value_prefixs.append(target_value_prefixs)
+                batch_values.append(target_values)
+                batch_value_target_types.append(targets_values_types)
+                batch_ube_targets.append(target_ubes)
+
+        batch_value_prefixs = np.asarray(batch_value_prefixs)
+        batch_values = np.asarray(batch_values)
+        batch_value_target_types = np.asarray(batch_value_target_types)
+        return batch_value_prefixs, batch_values, batch_value_target_types, batch_ube_targets
 
     def _prepare_policy_re_max_targets(self, policy_re_context, max_targets):
         """

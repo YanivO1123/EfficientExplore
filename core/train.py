@@ -65,13 +65,13 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     obs_batch_ori, action_batch, mask_batch, indices, weights_lst, make_time = inputs_batch
     target_value_prefix, target_value, target_policy = targets_batch
 
-    # if 'deep_sea' in config.env_name and step_count % config.test_interval == 0:
-    #     try:
-    #         debug_train_deep_sea(obs_batch_ori, target_value, target_policy, mask_batch,
-    #                              config.seed, config.stacked_observations,
-    #                              config.batch_size, config.num_unroll_steps, step_count)
-    #     except:
-    #         traceback.print_exc()
+    if 'deep_sea' in config.env_name and step_count % config.test_interval == 0:
+        try:
+            debug_train_deep_sea(obs_batch_ori, target_value, target_policy, target_value_prefix, mask_batch,
+                                 config.seed, config.stacked_observations,
+                                 config.batch_size, config.num_unroll_steps, step_count)
+        except:
+            traceback.print_exc()
 
     # [:, 0: config.stacked_observations * 3,:,:]
     # obs_batch_ori is the original observations in a batch
@@ -527,7 +527,7 @@ def train(config, summary_writer, model_path=None):
 
     return model, final_weights
 
-def debug_train_deep_sea(observations_batch, values_targets_batch, policy_targets_batch, mask_batch,
+def debug_train_deep_sea(observations_batch, values_targets_batch, policy_targets_batch, reward_target_batch, mask_batch,
                          action_mapping_seed, stacked_observations, batch_size, rollout_length, step_count):
     # Process the observations if necessary
     # observations_batch is of shape (batch_size, stacked_observations * unroll_size, h, w) [:, 0: config.stacked_observations * 3,:,:]
@@ -558,4 +558,7 @@ def debug_train_deep_sea(observations_batch, values_targets_batch, policy_target
     print(f"step_count = {step_count}, Num targets total = {batch_size * (rollout_length + 1)}, ouf of are diagonal = {len(diagonal_observation_indexes)}")
     for index, state in zip(diagonal_observation_indexes, diagonal_observations):
         [i, j] = index
-        print(f"Trajectory = {i}, State is: {state}, mask is: {mask_batch[i, j - 1] if j > 0 else None} value target is: {values_targets_batch[i, j]} and policy target is: {policy_targets_batch[i, j]}")
+        print(f"Trajectory = {i}, State is: {state}, mask is: {mask_batch[i, j - 1] if j > 0 else None}, "
+              f"value target is: {values_targets_batch[i, j]}, "
+              f"policy target is: {policy_targets_batch[i, j]} "
+              f"and reward target is: {reward_target_batch[i, j]}")

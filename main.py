@@ -52,11 +52,13 @@ if __name__ == '__main__':
     parser.add_argument('--info', type=str, default='none', help='debug string')
     parser.add_argument('--load_model', action='store_true', default=False, help='choose to load model')
     parser.add_argument('--model_path', type=str, default='./results/test_model.p', help='load model path')
-    parser.add_argument('--object_store_memory', type=int, default=None, help='object store memory') # original default=150 * 1024 * 1024 * 1024
+    parser.add_argument('--object_store_memory', type=int, default=None,
+                        help='object store memory') # original default=150 * 1024 * 1024 * 1024
     parser.add_argument('--cluster', action='store_true', default=False,
-                        help="Is used for switching experiment configurations between debugging (local, False) and final "
-                             "(computation cluster, True)")
-    parser.add_argument('--beta', type=float, default=None, help='Exploration / exploitation parameter, takes float >= 0')
+                        help="Is used for switching experiment configurations between debugging "
+                             "(local, False) and final (computation cluster, True)")
+    parser.add_argument('--beta', type=float, default=None,
+                        help='Exploration / exploitation parameter, takes float >= 0')
     parser.add_argument('--mu_explore', action='store_true', default=False,
                         help="Use MuExplore (exploratory MCTS), or not.")
     parser.add_argument('--uncertainty_architecture', action='store_true', default=False,
@@ -85,12 +87,11 @@ if __name__ == '__main__':
                              "Only relevant if uses p_w_vis_counter, ")
     parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube'], default='ensemble',
                         help="Decides the type of uncertainty to be used.")
-    parser.add_argument('--number_of_exploratory_envs', type=int, default=None, help='If MuExplore, number of environments <= p_mcts_num that'
-                                                                                     'are exploratory')
+    parser.add_argument('--number_of_exploratory_envs', type=int, default=None,
+                        help='If MuExplore, number of environments <= p_mcts_num that are exploratory')
     parser.add_argument('--det_deepsea_actions', action='store_true', default=False,
                         help="If true, use determinstic deep sea actions ")
-    parser.add_argument('--architecture_type', required=False,
-                        choices=['resnet', 'fully_connected'], default='resnet',
+    parser.add_argument('--architecture_type', required=False, choices=['resnet', 'fully_connected'], default='resnet',
                         help="Resnet (original), and fully-connected (custom and only applicable to Deep Sea)")
 
 

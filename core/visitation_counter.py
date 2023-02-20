@@ -57,6 +57,9 @@ class CountUncertainty:
             If state is the "null state" (all zeros), returns negative indexes
         """
         if len(np.shape(state)) == 2:
+            # If the given state is "zero observation" (starting observation)
+            if np.array_equal(np.ones_like(state), np.asarray(state)):
+                return -1, -1
             # If the given state is the "null state" (outside of env bounds)
             if not state.any():
                 return -1, -1
