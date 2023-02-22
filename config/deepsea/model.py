@@ -8,6 +8,8 @@ import torch.nn as nn
 
 from core.model import BaseNet, renormalize
 
+from config.deepsea.extended_deep_sea import DeepSea
+
 
 def mlp(
     input_size,
@@ -992,6 +994,10 @@ class FullyConnectedEfficientZeroNet(BaseNet):
                  pred_out=256,
                  init_zero=False,
                  rnd_scale=1.0,
+                 learned_model=True,
+                 env_size=10,
+                 mapping_seed=0,
+                 randomize_actions=True,
                  ):
         """
             FullyConnected (or, non-resnet) EfficientZero network.
@@ -1016,17 +1022,32 @@ class FullyConnectedEfficientZeroNet(BaseNet):
         self.representation_network = torch.nn.Identity()
         self.policy_network = mlp(self.encoded_state_size, fc_policy_layers, action_space_size, init_zero=init_zero, momentum=momentum)
         self.value_network = mlp(self.encoded_state_size, fc_value_layers, value_support_size, init_zero=init_zero, momentum=momentum)
-        self.dynamics_network = FullyConnectedDynamicsNetwork(
-            self.dynamics_input_size,
-            self.encoded_state_size,
-            observation_shape,
-            fc_state_prediction_layers,
-            fc_reward_layers,
-            reward_support_size,
-            lstm_hidden_size=lstm_hidden_size,
-            momentum=momentum,
-            init_zero=init_zero,
-        )
+        self.learned_model = learned_model
+        if learned_model:
+            self.dynamics_network = FullyConnectedDynamicsNetwork(
+                self.dynamics_input_size,
+                self.encoded_state_size,
+                observation_shape,
+                fc_state_prediction_layers,
+                fc_reward_layers,
+                reward_support_size,
+                lstm_hidden_size=lstm_hidden_size,
+                momentum=momentum,
+                init_zero=init_zero,
+            )
+        else:
+            self.dynamics_network = DeepSeaDynamicsNetwork(
+                env_size,
+                mapping_seed,
+                randomize_actions,
+                self.dynamics_input_size,
+                observation_shape,
+                fc_reward_layers,
+                reward_support_size,
+                lstm_hidden_size=lstm_hidden_size,
+                momentum=momentum,
+                init_zero=init_zero,
+            )
 
         # projection
         num_channels = 1
@@ -1059,13 +1080,18 @@ class FullyConnectedEfficientZeroNet(BaseNet):
                                       momentum=momentum)
 
     def representation(self, observation):
+        # Regardless of the number of stacked observations, we only pass the last
+        # observation = observation[:, -1, :, :].unsqueeze(1)
+        # Should be faster and doing the same:
+        observation = observation[:, -1:, :, :]
+
         # With the fully-connected deep_sea architecture, we maintain the original observation as the representation
         encoded_state = self.representation_network(observation)
         return encoded_state
 
     def prediction(self, encoded_state):
         # We reshape the encoded_state to the shape of input of the FC nets that follow
-        encoded_state = encoded_state.view(-1, self.encoded_state_size)
+        encoded_state = encoded_state.reshape(-1, self.encoded_state_size)
         policy = self.policy_network(encoded_state)
         value = self.value_network(encoded_state)
         return policy, value
@@ -1088,7 +1114,11 @@ class FullyConnectedEfficientZeroNet(BaseNet):
                 action[:, :, None, None] * action_one_hot / self.action_space_size
         )
         x = torch.cat((encoded_state, action_one_hot), dim=1)
-        next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, reward_hidden)
+        if self.learned_model:
+            next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, reward_hidden)
+        else:
+            next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, encoded_state, action,
+                                                                                    reward_hidden)
         return next_encoded_state, reward_hidden, value_prefix
 
     def get_params_mean(self):
@@ -1100,7 +1130,7 @@ class FullyConnectedEfficientZeroNet(BaseNet):
 
     def project(self, hidden_state, with_grad=True):
         # only the branch of proj + pred can share the gradients
-        hidden_state = hidden_state.view(-1, self.porjection_in_dim)
+        hidden_state = hidden_state.reshape(-1, self.porjection_in_dim)
         proj = self.projection(hidden_state)
 
         # with grad, use proj_head
@@ -1179,6 +1209,121 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             dynamic_mean += np.abs(param.detach().cpu().numpy().reshape(-1)).tolist()
         dynamic_mean = sum(dynamic_mean) / len(dynamic_mean)
         return dynamic_mean
+
+    def get_reward_mean(self):
+        for index, (name, param) in enumerate(self.fc.named_parameters()):
+            if index > 0:
+                temp_weights = param.detach().cpu().numpy().reshape(-1)
+                reward_w_dist = np.concatenate((reward_w_dist, temp_weights))
+            else:
+                reward_w_dist = param.detach().cpu().numpy().reshape(-1)
+        reward_mean = np.abs(reward_w_dist).mean()
+        return reward_w_dist, reward_mean
+
+class DeepSeaDynamicsNetwork(nn.Module):
+    def __init__(self,
+                 env_size,
+                 mapping_seed,
+                 randomize_actions,
+                 dynamics_input_size,
+                 hidden_state_shape,
+                 fc_reward_layers,
+                 full_support_size,
+                 lstm_hidden_size=64,
+                 momentum=0.1,
+                 init_zero=False,
+                 ):
+        super().__init__()
+        self.env_size = env_size
+        self.hidden_state_shape = hidden_state_shape
+        self.dynamics_input_size = dynamics_input_size
+        # The input to the lstm is the concat tensor of hidden_state and action
+        self.lstm = nn.LSTM(input_size=dynamics_input_size, hidden_size=lstm_hidden_size)
+        self.bn_value_prefix = nn.BatchNorm1d(lstm_hidden_size, momentum=momentum)
+        self.fc = mlp(lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero,
+                      momentum=momentum)
+        # self.true_model = DeepSea(size=env_size, mapping_seed=mapping_seed, seed=mapping_seed,
+        #                           randomize_actions=randomize_actions)
+        self.action_mapping = torch.from_numpy(DeepSea(size=env_size, mapping_seed=mapping_seed, seed=mapping_seed,
+                                  randomize_actions=randomize_actions)._action_mapping).long()
+        self.action_mapping = self.action_mapping * 2 - 1
+
+    def forward(self, x, current_state, action, reward_hidden):
+        # Produce next states from previous state and action, in the shape MuZero expects:
+        # [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
+        with torch.no_grad():
+            next_state = self.get_batched_next_states(current_state, action)
+
+        # Flatten input state-action for FC reward prediction nets
+        x = x.view(-1, self.dynamics_input_size)
+
+        # Reward prediction is done based on EfficientExplore architecture
+        x = x.unsqueeze(0)
+        value_prefix, reward_hidden = self.lstm(x, reward_hidden)
+        value_prefix = value_prefix.squeeze(0)
+        value_prefix = self.bn_value_prefix(value_prefix)
+        value_prefix = nn.functional.relu(value_prefix)
+        value_prefix = self.fc(value_prefix)
+
+        return next_state, reward_hidden, value_prefix
+
+    def get_batched_next_states(self, batched_states, batched_actions):
+        """
+        Shape of batched_states is (B, H, W)
+        Shape of batched_actions is (B, 1)
+        """
+        batch_size = batched_states.shape[0]
+        N = batched_states.shape[-1]
+
+        # Flatten 1 hot representation
+        flattened_batched_states = batched_states.reshape(shape=(batch_size, N * N)).to(batched_states.device)
+
+        # Get the indexes of the 1 hot along the B dimension, and shape them to 1 dim vectors of size batch_size
+        rows, columns = (flattened_batched_states.argmax(dim=1) // N).long().squeeze().to(batched_states.device), (
+                flattened_batched_states.argmax(dim=1) % N).long().squeeze().to(batched_states.device)
+
+        # Switch actions to -1, +1
+        batched_actions = batched_actions.squeeze() * 2 - 1
+
+        # action_mapping expected to already be in the form -1, +1, this line is here for logic
+        # self.action_mapping = self.action_mapping * 2 - 1
+
+        # Expand the action mapping
+        action_mapping = self.action_mapping.unsqueeze(0).expand(batch_size, -1, -1).to(batched_states.device)
+
+        # Flatten to shape [B, N * N]
+        flattened_action_mapping = action_mapping.reshape(batch_size, N * N).to(batched_states.device)
+
+        # Get all the actions_right with gather in the flattened (row, col) indexes.
+        flattened_indexes = (rows * N + columns).to(batched_states.device)
+        # actions_right should be of shape [B]
+        actions_right = flattened_action_mapping.take(flattened_indexes).to(batched_states.device)
+
+        # All states go down 1 row
+        rows = rows + 1
+
+        # Change the actions right from which action is right to what needs to happen to column.
+        # This is done by -1 * -1 = move one to the right, -1 * 1 = move 1 to the left
+        change_in_column = (actions_right * batched_actions).to(batched_states.device)
+
+        # Change the column values
+        columns = torch.clip(columns + change_in_column, min=0).to(batched_states.device)
+
+        # 1-hot the rows and column back into a tensor for shape [B, (N + 1) x (N + 1)]
+        flattened_batched_next_states = torch.zeros(size=(batch_size, (N + 1) * (N + 1))) \
+            .to(batched_states.device) \
+            .scatter_(dim=-1, index=rows.unsqueeze(-1) * (N + 1) + columns.unsqueeze(-1), value=1)
+
+        # Reshape tensor back to B, 1, (N + 1), (N + 1)
+        batched_next_states = flattened_batched_next_states.reshape(shape=(batch_size, N + 1, N + 1)).unsqueeze(1)
+
+        # Return the top "corner" of size N x N
+        batched_next_states = batched_next_states[:, :, :-1, :-1]
+
+        return batched_next_states
+
+    def get_dynamic_mean(self):
+        return 0
 
     def get_reward_mean(self):
         for index, (name, param) in enumerate(self.fc.named_parameters()):

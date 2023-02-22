@@ -30,7 +30,7 @@ class DeepSeaConfig(BaseConfig):
             value_delta_max=0.01,
             num_simulations=50,
             batch_size=64,  # 32 # 64 #256,  # TODO: can be larger with smaller net
-            td_steps=5,     # 5, 10
+            td_steps=3,     # 5, 10, 3, 1
             num_actors=1,
             # network initialization/ & normalization
             episode_life=False, # This uses properties of real gym
@@ -56,11 +56,11 @@ class DeepSeaConfig(BaseConfig):
             stacked_observations=1,     # 4 2
             # coefficient
             reward_loss_coeff=1,
-            value_loss_coeff=0.25,  # 0.25 original # 1
+            value_loss_coeff=0.5,  # 0.25 original # 1 0.5
             policy_loss_coeff=1,
             consistency_coeff=2,
             # reward sum
-            lstm_hidden_size=128, #512,    # TODO: Can lower aggressively
+            lstm_hidden_size=64, #512,  128  # TODO: Can lower aggressively
             lstm_horizon_len=5,
             # siamese
             proj_hid=512, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
@@ -109,7 +109,7 @@ class DeepSeaConfig(BaseConfig):
         self.fc_value_layers = [64, 64]
         self.fc_policy_layers = [64, 64]
         self.fc_rnd_layers = [1024, 1024, 1024, 256]
-        self.fc_lstm_hidden_size = 64
+        self.fc_lstm_hidden_size = self.lstm_hidden_size
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         if self.change_temperature:
@@ -124,13 +124,13 @@ class DeepSeaConfig(BaseConfig):
 
     def set_game(self, env_name, save_video=False, save_path=None, video_callable=None, dimensions=9):
         self.env_name = env_name
-        env_size = sweep.SETTINGS[env_name]['size']
+        self.env_size = sweep.SETTINGS[env_name]['size']
         self.image_channel = 1
-        obs_shape = (self.image_channel, env_size, env_size)
+        obs_shape = (self.image_channel, self.env_size, self.env_size)
         self.obs_shape = (obs_shape[0] * self.stacked_observations, obs_shape[1], obs_shape[2])
-        self.history_length = env_size
-        self.max_moves = env_size
-        self.test_max_moves = env_size
+        self.history_length = self.env_size
+        self.max_moves = self.env_size
+        self.test_max_moves = self.env_size
         game = self.new_game()
 
         self.action_space_size = game.action_space_size
@@ -157,6 +157,10 @@ class DeepSeaConfig(BaseConfig):
                 pred_out=self.pred_out,
                 init_zero=self.init_zero,
                 rnd_scale=self.rnd_scale,
+                learned_model=self.learned_model,
+                env_size=self.env_size,
+                mapping_seed=self.seed,
+                randomize_actions=self.deepsea_randomize_actions,
             )
         elif self.use_uncertainty_architecture:
             return EfficientExploreNet(

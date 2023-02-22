@@ -371,6 +371,8 @@ class BaseConfig(object):
 
         # Deep sea for debugging
         self.deepsea_randomize_actions = True
+        self.learned_model = True
+        self.env_size = -1  # reset in set_game
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -523,6 +525,7 @@ class BaseConfig(object):
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
         if args.case == 'deep_sea':
             self.architecture_type = args.architecture_type
+            self.learned_model = not args.alpha_zero_planning
         else:
             self.architecture_type = 'resnet'
         if self.architecture_type == 'fully_connected':
