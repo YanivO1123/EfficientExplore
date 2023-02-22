@@ -13,7 +13,7 @@ from bsuite.utils import gym_wrapper
 class DeepSeaConfig(BaseConfig):
     def __init__(self):
         super(DeepSeaConfig, self).__init__(
-            training_steps=40 * 1000, #100000,
+            training_steps=70 * 1000, #100000,
             last_steps=5000,#20000
             test_interval=400, #10000,
             log_interval=400,
@@ -41,14 +41,14 @@ class DeepSeaConfig(BaseConfig):
             image_based=False,   #
             # lr scheduler
             lr_warm_up=0.01,
-            lr_init=0.2,
+            lr_init=0.1,    # original 0.2
             lr_decay_rate=0.1,
-            lr_decay_steps=40 * 1000,
+            lr_decay_steps=70 * 1000,
             num_unroll_steps=5, # 5    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
             start_transitions=600,   # 500 400 32
-            total_transitions=40 * 1000,
+            total_transitions=70 * 1000,
             transition_num=1,
             do_consistency=True,
             # frame skip & stack observation
@@ -56,7 +56,7 @@ class DeepSeaConfig(BaseConfig):
             stacked_observations=1,     # 4 2
             # coefficient
             reward_loss_coeff=1,
-            value_loss_coeff=0.5,  # 0.25 original # 1 0.5
+            value_loss_coeff=1,  # 0.25 original # 1 0.5
             policy_loss_coeff=1,
             consistency_coeff=2,
             # reward sum
