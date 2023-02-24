@@ -771,7 +771,7 @@ class EfficientExploreNet(EfficientZeroNet):
         state = state.view(-1, self.input_size_rnd)
         return self.rnd_scale * torch.nn.functional.mse_loss(self.rnd_network(state),
                                                              self.rnd_target_network(state),
-                                                             reduction='none')
+                                                             reduction='none').sum(dim=-1)
 
 class EnsembleDynamicsNetwork(DynamicsNetwork):
     def __init__(
@@ -998,6 +998,7 @@ class FullyConnectedEfficientZeroNet(BaseNet):
                  env_size=10,
                  mapping_seed=0,
                  randomize_actions=True,
+                 uncertainty_type='rnd',
                  ):
         """
             FullyConnected (or, non-resnet) EfficientZero network.
@@ -1005,7 +1006,10 @@ class FullyConnectedEfficientZeroNet(BaseNet):
             __________
             observation_shape: tuple or list
                 shape of observations: [C, W, H] = [1, N, N], for deep sea for which this arch. is implemented.
-
+            learned_model:
+            env_size:
+            mapping_seed:
+            randomize_actions:
         """
         super(FullyConnectedEfficientZeroNet, self).__init__(inverse_value_transform, inverse_reward_transform, lstm_hidden_size)
         self.proj_hid = proj_hid
@@ -1014,6 +1018,7 @@ class FullyConnectedEfficientZeroNet(BaseNet):
         self.pred_out = pred_out
         self.init_zero = init_zero
         self.action_space_size = action_space_size
+        self.uncertainty_type = uncertainty_type
         # The size of flattened encoded state:
         self.encoded_state_size = observation_shape[0] * observation_shape[1] * observation_shape[2]
         # The size of the input to the dynamics network is (num_channels + the action channel) * H * W
@@ -1021,7 +1026,8 @@ class FullyConnectedEfficientZeroNet(BaseNet):
         # In this arch. the representation is the original observation
         self.representation_network = torch.nn.Identity()
         self.policy_network = mlp(self.encoded_state_size, fc_policy_layers, action_space_size, init_zero=init_zero, momentum=momentum)
-        self.value_network = mlp(self.encoded_state_size, fc_value_layers, value_support_size, init_zero=init_zero, momentum=momentum)
+        self.value_network = mlp(self.encoded_state_size, fc_value_layers, value_support_size, init_zero=init_zero,
+                                 momentum=momentum)
         self.learned_model = learned_model
         if learned_model:
             self.dynamics_network = FullyConnectedDynamicsNetwork(
@@ -1094,6 +1100,7 @@ class FullyConnectedEfficientZeroNet(BaseNet):
         encoded_state = encoded_state.reshape(-1, self.encoded_state_size)
         policy = self.policy_network(encoded_state)
         value = self.value_network(encoded_state)
+
         return policy, value
 
     def dynamics(self, encoded_state, reward_hidden, action):
@@ -1141,10 +1148,10 @@ class FullyConnectedEfficientZeroNet(BaseNet):
             return proj.detach()
 
     def compute_rnd_uncertainty(self, state):
-        state = state.view(-1, self.input_size_rnd)
+        state = state.reshape(-1, self.input_size_rnd)
         return self.rnd_scale * torch.nn.functional.mse_loss(self.rnd_network(state),
                                                              self.rnd_target_network(state),
-                                                             reduction='none')
+                                                             reduction='none').sum(dim=-1)
 
 class FullyConnectedDynamicsNetwork(nn.Module):
     def __init__(self,
@@ -1251,8 +1258,7 @@ class DeepSeaDynamicsNetwork(nn.Module):
     def forward(self, x, current_state, action, reward_hidden):
         # Produce next states from previous state and action, in the shape MuZero expects:
         # [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
-        with torch.no_grad():
-            next_state = self.get_batched_next_states(current_state, action)
+        next_state = self.get_batched_next_states(current_state, action)
 
         # Flatten input state-action for FC reward prediction nets
         x = x.view(-1, self.dynamics_input_size)

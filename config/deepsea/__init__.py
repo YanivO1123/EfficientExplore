@@ -165,7 +165,7 @@ class DeepSeaConfig(BaseConfig):
                 env_size=self.env_size,
                 mapping_seed=self.seed,
                 randomize_actions=self.deepsea_randomize_actions,
-                # q_values=self.q_values,
+                uncertainty_type=self.uncertainty_architecture_type
             )
         elif self.use_uncertainty_architecture:
             return EfficientExploreNet(

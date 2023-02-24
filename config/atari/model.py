@@ -770,7 +770,7 @@ class EfficientExploreNet(EfficientZeroNet):
         state = state.view(-1, self.input_size_rnd)
         return self.rnd_scale * torch.nn.functional.mse_loss(self.rnd_network(state),
                                                              self.rnd_target_network(state),
-                                                             reduction='none')
+                                                             reduction='none').sum(dim=-1)
 
 class EnsembleDynamicsNetwork(DynamicsNetwork):
     def __init__(

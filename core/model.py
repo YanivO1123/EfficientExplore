@@ -151,7 +151,7 @@ class BaseNet(nn.Module):
                     value_prefix_variance = self.ensemble_prediction_to_variance(value_prefix).detach().cpu().numpy()
             elif self.uncertainty_type == 'rnd':
                 value_variance = self.compute_rnd_uncertainty(state.detach()).detach().cpu().numpy()
-                value_prefix_variance = self.compute_rnd_uncertainty(state.detach())
+                value_prefix_variance = self.compute_rnd_uncertainty(state.detach()).detach().cpu().numpy()
             elif self.uncertainty_type == 'rnd_ube' or self.uncertainty_type == 'ensemble_ube':
                 value_variance = self.compute_ube_uncertainty(state.detach()).detach().cpu().numpy()
                 value_prefix_variance = self.compute_rnd_uncertainty(state.detach()).detach().cpu().numpy()
