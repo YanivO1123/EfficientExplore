@@ -334,7 +334,9 @@ class DataWorker(object):
                     # MuExplore: if we wish to use a visitation counter:
                     if self.config.use_visitation_counter and self.visitation_counter is not None:
                         MCTS(self.config).search_w_visitation_counter(roots, model, hidden_state_roots, reward_hidden_roots,
-                                                 self.visitation_counter, initial_observations_for_counter, use_state_visits=self.config.plan_with_state_visits)
+                                                 self.visitation_counter, initial_observations_for_counter,
+                                                                      use_state_visits=self.config.plan_with_state_visits,
+                                                                      sampling_times=self.config.sampling_times)
                     else:   # Otherwise
                         # do MCTS for a policy
                         MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=True)
@@ -402,10 +404,10 @@ class DataWorker(object):
                                     print(f"Printing the state-action visitation counter at the last row: \n"
                                           f"{self.visitation_counter.sa_counts[-1, :, :]} \n"
                                           # f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
-                                          f"Printing the state visitation counter: \n"
-                                          f"{self.visitation_counter.s_counts}"
+                                          # f"Printing the state visitation counter: \n"
+                                          # f"{self.visitation_counter.s_counts}"
                                           , flush=True)
-                                self.debug_deep_sea(model)
+                                # self.debug_deep_sea(model)
                             except:
                                 traceback.print_exc()
 

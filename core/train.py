@@ -65,7 +65,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     obs_batch_ori, action_batch, mask_batch, indices, weights_lst, make_time = inputs_batch
     target_value_prefix, target_value, target_policy = targets_batch
 
-    if 'deep_sea' in config.env_name and step_count % config.test_interval == 0:
+    if 'deep_sea' in config.env_name and step_count % config.test_interval == 0 and False:
         try:
             debug_train_deep_sea(obs_batch_ori, target_value, target_policy, target_value_prefix, mask_batch,
                                  config.seed, config.stacked_observations,

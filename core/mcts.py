@@ -120,7 +120,7 @@ class MCTS(object):
                                               min_max_stats_lst, results, is_reset_lst)
 
     def search_w_visitation_counter(self, roots, model, hidden_state_roots, reward_hidden_roots, visitation_counter: CountUncertainty,
-               initial_observation_roots, use_state_visits=False):
+               initial_observation_roots, use_state_visits=False, sampling_times=0):
         """Do MCTS for the roots (a batch of root nodes in parallel). Parallel in model inference
         Parameters
         ----------
@@ -203,7 +203,10 @@ class MCTS(object):
                 if self.config.plan_with_visitation_counter:
                     value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations, last_actions, use_state_visits=use_state_visits).tolist()
                     # Compute the PROPAGATED value uncertainty, by doing Monte-Carlo sims with the real model for sampling_times sims, up to horizon propagation_horizon
-                    value_variance_pool = visitation_counter.get_propagated_value_uncertainty(true_observations, propagation_horizon=value_propagation_horizon, sampling_times=0, use_state_visits=use_state_visits).tolist()
+                    value_variance_pool = visitation_counter.get_propagated_value_uncertainty(true_observations,
+                                                                                              propagation_horizon=value_propagation_horizon,
+                                                                                              sampling_times=sampling_times,
+                                                                                              use_state_visits=use_state_visits).tolist()
 
                 last_actions = torch.from_numpy(np.asarray(last_actions)).to(device).unsqueeze(1).long()
 

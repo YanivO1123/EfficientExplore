@@ -92,6 +92,9 @@ if __name__ == '__main__':
     parser.add_argument('--architecture_type', required=False,
                         choices=['resnet', 'fully_connected'], default='resnet',
                         help="Resnet (original), and fully-connected (custom and only applicable to Deep Sea)")
+    parser.add_argument('--sampling_times', type=int, default=0, help='If MuExplore and visitation counter, '
+                                                                      'whether to use the sampled value '
+                                                                      'propagation or not. Defaults to not')
     parser.add_argument('--alpha_zero_planning', action='store_true', default=False,
                         help="Only applied to deep_sea. If true, the dynamics model is not learned, but the true model "
                              "is used instead. Does not modify reward or value learning.")

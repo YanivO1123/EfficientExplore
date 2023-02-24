@@ -87,6 +87,9 @@ class BaseConfig(object):
                  training_ratio: float = 1,
                  use_max_value_targets: bool = False,
                  use_max_policy_targets: bool = False,
+                 sampling_times: int = 0,
+                 # loss_uncertainty_weighting: bool = False,
+                 # q_values: bool = False,
                  ):
         """Base Config for EfficietnZero
         Parameters
@@ -243,6 +246,13 @@ class BaseConfig(object):
         use_max_policy_targets: bool
             If True, uses max_policy_targets from max_value_targets (see paper, learning from exploratory decisions). Otherwise, does standard
             EfficientZero.
+        sampling_times: int
+            If using the visitataion counter, and sampled value uncertainty propagation, how many times to sample.
+        loss_uncertainty_weighting: bool
+            If True, weigh the value targets with the uncertainty. Uncertainty -> 0, weight -> 1. Uncertainty -> inf,
+            weight -> 0.2.
+        q_values: bool
+            If true, MuZero's values functions are Q-functions instead.
         """
         # Self-Play
         self.action_space_size = None
@@ -369,10 +379,16 @@ class BaseConfig(object):
         self.use_max_value_targets = use_max_value_targets
         self.use_max_policy_targets = use_max_policy_targets
 
+        # Uncertainty weighting of losses
+        # self.loss_uncertainty_weighting = loss_uncertainty_weighting
+
         # Deep sea for debugging
         self.deepsea_randomize_actions = True
         self.learned_model = True
         self.env_size = -1  # reset in set_game
+        self.sampling_times = sampling_times
+
+        # self.q_values = q_values
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -521,6 +537,7 @@ class BaseConfig(object):
             if self.plan_with_visitation_counter:
                 self.plan_with_fake_visit_counter = args.plan_w_fake_visit_counter
                 self.plan_with_state_visits = args.plan_w_state_visits
+            # self.q_values = args.q_values and args.architecture_type == 'fully_connected'
         self.use_uncertainty_architecture = args.uncertainty_architecture
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
         if args.case == 'deep_sea':
@@ -532,6 +549,7 @@ class BaseConfig(object):
             self.uncertainty_architecture_type = 'rnd'
         # MuExplore is only applicable with some uncertainty mechanism
         assert (args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter)) or (not args.mu_explore)
+        self.sampling_times = args.sampling_times
         self.mu_explore = args.mu_explore and (self.use_uncertainty_architecture or self.use_visitation_counter)
         self.disable_policy_in_exploration = args.disable_policy_in_exploration
         self.root_exploration_fraction = args.exploration_fraction
@@ -541,9 +559,14 @@ class BaseConfig(object):
         if args.number_of_exploratory_envs is not None:
             assert args.number_of_exploratory_envs <= self.p_mcts_num
             self.number_of_exploratory_envs = args.number_of_exploratory_envs
+
         # Max value and policy targets can be used independently, but only with mu_explore
         self.use_max_value_targets = args.use_max_value_targets and self.mu_explore
         self.use_max_policy_targets = args.use_max_policy_targets and self.mu_explore
+
+        # loss_uncertainty_weighting can only be used with a source of uncertainty
+        # self.loss_uncertainty_weighting = args.loss_uncertainty_weighting and \
+        #                                   (args.visit_counter or args.uncertainty_architecture)
 
         if not self.do_consistency:
             self.consistency_coeff = 0

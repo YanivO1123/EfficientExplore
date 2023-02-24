@@ -18,6 +18,10 @@ def _test(config, shared_storage):
     test_model = config.get_uniform_network()
     best_test_score = float('-inf')
     episodes = 0
+
+    mean_test_results_list = []
+    training_steps_list = []
+
     while True:
         counter = ray.get(shared_storage.get_counter.remote())
         if counter == 0:
@@ -47,6 +51,12 @@ def _test(config, shared_storage):
 
             shared_storage.add_test_log.remote(counter, test_log)
             print('Training step {}, test scores: \n{} of {} eval steps.'.format(counter, test_score, eval_steps))
+
+            mean_test_results_list.append(mean_score)
+            training_steps_list.append(counter)
+
+        np.save(config.exp_path + "/mean_test_results", np.asarray(mean_test_results_list))
+        np.save(config.exp_path + "/training_steps", np.asarray(training_steps_list))
 
         time.sleep(30)
 
