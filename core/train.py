@@ -183,11 +183,11 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 if (config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube') \
                         and config.use_uncertainty_architecture:
                     # Compute value RND loss
-                    rnd_loss += model.compute_value_rnd_uncertainty(hidden_state.detach()).mean()
+                    rnd_loss += model.compute_value_rnd_uncertainty(hidden_state.detach()).mean() * mask_batch[:, step_i]
 
                     # Compute reward RND loss
                     action = action_batch[:, step_i]
-                    rnd_loss += model.compute_reward_rnd_uncertainty(hidden_state.detach(), action).mean()
+                    rnd_loss += model.compute_reward_rnd_uncertainty(hidden_state.detach(), action).mean() * mask_batch[:, step_i]
 
                 policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(1) * mask_batch[:, step_i]
                 value_loss += config.scalar_value_loss(value, target_value_phi[:, step_i + 1]) * mask_batch[:, step_i]
