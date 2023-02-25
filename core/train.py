@@ -148,14 +148,10 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     value_prefix_loss = torch.zeros(batch_size, device=config.device)
     consistency_loss = torch.zeros(batch_size, device=config.device)
 
-    # Rnd loss:
+    # value RND loss:
     if (config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube') \
             and config.use_uncertainty_architecture:
-        # flatten the state
-        hidden_state_for_rnd = hidden_state.view(-1, model.input_size_rnd).float().detach()
-        prediction = model.rnd_network(hidden_state_for_rnd)
-        target = model.rnd_target_network(hidden_state_for_rnd).detach()
-        rnd_loss = config.rnd_loss(prediction, target).sum(1).mean()
+        rnd_loss = model.compute_value_rnd_uncertainty(hidden_state.detach()).mean()
     else:
         rnd_loss = 0
 
@@ -183,6 +179,15 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
                     other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                     consistency_loss += temp_loss
+
+                if (config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube') \
+                        and config.use_uncertainty_architecture:
+                    # Compute value RND loss
+                    rnd_loss += model.compute_value_rnd_uncertainty(hidden_state.detach()).mean()
+
+                    # Compute reward RND loss
+                    action = action_batch[:, step_i]
+                    rnd_loss += model.compute_reward_rnd_uncertainty(hidden_state.detach(), action).mean()
 
                 policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(1) * mask_batch[:, step_i]
                 value_loss += config.scalar_value_loss(value, target_value_phi[:, step_i + 1]) * mask_batch[:, step_i]

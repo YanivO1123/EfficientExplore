@@ -4,7 +4,7 @@ from core.config import BaseConfig
 from core.utils import make_deepsea, EpisodicLifeEnv
 from core.dataset import Transforms
 from config.deepsea.env_wrapper import DeepSeaWrapper
-from config.deepsea.model import EfficientZeroNet, FullyConnectedEfficientZeroNet, EfficientExploreNet
+from config.deepsea.model import EfficientZeroNet, FullyConnectedEfficientExploreNet, EfficientExploreNet
 from core.config import DiscreteSupport
 import bsuite
 from bsuite.utils import gym_wrapper
@@ -141,7 +141,7 @@ class DeepSeaConfig(BaseConfig):
 
     def get_uniform_network(self):
         if self.architecture_type == 'fully_connected':
-            return FullyConnectedEfficientZeroNet(
+            return FullyConnectedEfficientExploreNet(
                 self.obs_shape,
                 self.action_space_size,
                 self.fc_state_prediction_layers,

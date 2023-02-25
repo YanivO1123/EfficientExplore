@@ -12,13 +12,13 @@ from config.deepsea.extended_deep_sea import DeepSea
 
 
 def mlp(
-    input_size,
-    layer_sizes,
-    output_size,
-    output_activation=nn.Identity,
-    activation=nn.ReLU,
-    momentum=0.1,
-    init_zero=False,
+        input_size,
+        layer_sizes,
+        output_size,
+        output_activation=nn.Identity,
+        activation=nn.ReLU,
+        momentum=0.1,
+        init_zero=False,
 ):
     """MLP layers
     Parameters
@@ -111,7 +111,8 @@ class DownSample(nn.Module):
             padding=1,
             bias=False,
         )
-        self.downsample_block = ResidualBlock(out_channels // 2, out_channels, momentum=momentum, stride=2, downsample=self.conv2)
+        self.downsample_block = ResidualBlock(out_channels // 2, out_channels, momentum=momentum, stride=2,
+                                              downsample=self.conv2)
         self.resblocks2 = nn.ModuleList(
             [ResidualBlock(out_channels, out_channels, momentum=momentum) for _ in range(1)]
         )
@@ -140,12 +141,12 @@ class DownSample(nn.Module):
 # Encode the observations into hidden states
 class RepresentationNetwork(nn.Module):
     def __init__(
-        self,
-        observation_shape,
-        num_blocks,
-        num_channels,
-        downsample,
-        momentum=0.1,
+            self,
+            observation_shape,
+            num_blocks,
+            num_channels,
+            downsample,
+            momentum=0.1,
     ):
         """Representation network
         Parameters
@@ -198,16 +199,16 @@ class RepresentationNetwork(nn.Module):
 # Predict next hidden states given current states and actions
 class DynamicsNetwork(nn.Module):
     def __init__(
-        self,
-        num_blocks,
-        num_channels,
-        reduced_channels_reward,
-        fc_reward_layers,
-        full_support_size,
-        block_output_size_reward,
-        lstm_hidden_size=64,
-        momentum=0.1,
-        init_zero=False,
+            self,
+            num_blocks,
+            num_channels,
+            reduced_channels_reward,
+            fc_reward_layers,
+            full_support_size,
+            block_output_size_reward,
+            lstm_hidden_size=64,
+            momentum=0.1,
+            init_zero=False,
     ):
         """Dynamics network
         Parameters
@@ -246,10 +247,11 @@ class DynamicsNetwork(nn.Module):
         self.block_output_size_reward = block_output_size_reward
         self.lstm = nn.LSTM(input_size=self.block_output_size_reward, hidden_size=self.lstm_hidden_size)
         self.bn_value_prefix = nn.BatchNorm1d(self.lstm_hidden_size, momentum=momentum)
-        self.fc = mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero, momentum=momentum)
+        self.fc = mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero,
+                      momentum=momentum)
 
     def forward(self, x, reward_hidden):
-        state = x[:,:-1,:,:]
+        state = x[:, :-1, :, :]
         x = self.conv(x)
         x = self.bn(x)
 
@@ -295,19 +297,19 @@ class DynamicsNetwork(nn.Module):
 # predict the value and policy given hidden states
 class PredictionNetwork(nn.Module):
     def __init__(
-        self,
-        action_space_size,
-        num_blocks,
-        num_channels,
-        reduced_channels_value,
-        reduced_channels_policy,
-        fc_value_layers,
-        fc_policy_layers,
-        full_support_size,
-        block_output_size_value,
-        block_output_size_policy,
-        momentum=0.1,
-        init_zero=False,
+            self,
+            action_space_size,
+            num_blocks,
+            num_channels,
+            reduced_channels_value,
+            reduced_channels_policy,
+            fc_value_layers,
+            fc_policy_layers,
+            full_support_size,
+            block_output_size_value,
+            block_output_size_policy,
+            momentum=0.1,
+            init_zero=False,
     ):
         """Prediction network
         Parameters
@@ -346,8 +348,10 @@ class PredictionNetwork(nn.Module):
         self.bn_policy = nn.BatchNorm2d(reduced_channels_policy, momentum=momentum)
         self.block_output_size_value = block_output_size_value
         self.block_output_size_policy = block_output_size_policy
-        self.fc_value = mlp(self.block_output_size_value, fc_value_layers, full_support_size, init_zero=init_zero, momentum=momentum)
-        self.fc_policy = mlp(self.block_output_size_policy, fc_policy_layers, action_space_size, init_zero=init_zero, momentum=momentum)
+        self.fc_value = mlp(self.block_output_size_value, fc_value_layers, full_support_size, init_zero=init_zero,
+                            momentum=momentum)
+        self.fc_policy = mlp(self.block_output_size_policy, fc_policy_layers, action_space_size, init_zero=init_zero,
+                             momentum=momentum)
 
     def forward(self, x):
         for block in self.resblocks:
@@ -369,30 +373,30 @@ class PredictionNetwork(nn.Module):
 
 class EfficientZeroNet(BaseNet):
     def __init__(
-        self,
-        observation_shape,
-        action_space_size,
-        num_blocks,
-        num_channels,
-        reduced_channels_reward,
-        reduced_channels_value,
-        reduced_channels_policy,
-        fc_reward_layers,
-        fc_value_layers,
-        fc_policy_layers,
-        reward_support_size,
-        value_support_size,
-        downsample,
-        inverse_value_transform,
-        inverse_reward_transform,
-        lstm_hidden_size,
-        bn_mt=0.1,
-        proj_hid=256,
-        proj_out=256,
-        pred_hid=64,
-        pred_out=256,
-        init_zero=False,
-        state_norm=False
+            self,
+            observation_shape,
+            action_space_size,
+            num_blocks,
+            num_channels,
+            reduced_channels_reward,
+            reduced_channels_value,
+            reduced_channels_policy,
+            fc_reward_layers,
+            fc_value_layers,
+            fc_policy_layers,
+            reward_support_size,
+            value_support_size,
+            downsample,
+            inverse_value_transform,
+            inverse_reward_transform,
+            lstm_hidden_size,
+            bn_mt=0.1,
+            proj_hid=256,
+            proj_out=256,
+            pred_hid=64,
+            pred_out=256,
+            init_zero=False,
+            state_norm=False
     ):
         """EfficientZero network
         Parameters
@@ -455,9 +459,9 @@ class EfficientZeroNet(BaseNet):
         self.action_space_size = action_space_size
         block_output_size_reward = (
             (
-                reduced_channels_reward
-                * math.ceil(observation_shape[1] / 16)
-                * math.ceil(observation_shape[2] / 16)
+                    reduced_channels_reward
+                    * math.ceil(observation_shape[1] / 16)
+                    * math.ceil(observation_shape[2] / 16)
             )
             if downsample
             else (reduced_channels_reward * observation_shape[1] * observation_shape[2])
@@ -465,9 +469,9 @@ class EfficientZeroNet(BaseNet):
 
         block_output_size_value = (
             (
-                reduced_channels_value
-                * math.ceil(observation_shape[1] / 16)
-                * math.ceil(observation_shape[2] / 16)
+                    reduced_channels_value
+                    * math.ceil(observation_shape[1] / 16)
+                    * math.ceil(observation_shape[2] / 16)
             )
             if downsample
             else (reduced_channels_value * observation_shape[1] * observation_shape[2])
@@ -475,9 +479,9 @@ class EfficientZeroNet(BaseNet):
 
         block_output_size_policy = (
             (
-                reduced_channels_policy
-                * math.ceil(observation_shape[1] / 16)
-                * math.ceil(observation_shape[2] / 16)
+                    reduced_channels_policy
+                    * math.ceil(observation_shape[1] / 16)
+                    * math.ceil(observation_shape[2] / 16)
             )
             if downsample
             else (reduced_channels_policy * observation_shape[1] * observation_shape[2])
@@ -519,7 +523,8 @@ class EfficientZeroNet(BaseNet):
         )
 
         # projection
-        in_dim = num_channels * observation_shape[1] * observation_shape[2] # num_channels * math.ceil(observation_shape[1] / 16) * math.ceil(observation_shape[2] / 16)
+        in_dim = num_channels * observation_shape[1] * observation_shape[
+            2]  # num_channels * math.ceil(observation_shape[1] / 16) * math.ceil(observation_shape[2] / 16)
         self.porjection_in_dim = in_dim
         self.projection = nn.Sequential(
             nn.Linear(self.porjection_in_dim, self.proj_hid),
@@ -565,7 +570,7 @@ class EfficientZeroNet(BaseNet):
             .float()
         )
         action_one_hot = (
-            action[:, :, None, None] * action_one_hot / self.action_space_size
+                action[:, :, None, None] * action_one_hot / self.action_space_size
         )
         x = torch.cat((encoded_state, action_one_hot), dim=1)
         next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, reward_hidden)
@@ -719,7 +724,7 @@ class EfficientExploreNet(EfficientZeroNet):
                 prior_scale=prior_scale,
             )
         elif self.uncertainty_type == 'rnd' or self.uncertainty_type == 'rnd_ube':
-            self.input_size_rnd = (
+            self.input_size_value_rnd = (
                 (
                         num_channels
                         * math.ceil(observation_shape[1] / 16)
@@ -728,10 +733,25 @@ class EfficientExploreNet(EfficientZeroNet):
                 if downsample
                 else (num_channels * observation_shape[1] * observation_shape[2])
             )
+            self.input_size_reward_rnd = (
+                (
+                        (num_channels + 1)
+                        * math.ceil(observation_shape[1] / 16)
+                        * math.ceil(observation_shape[2] / 16)
+                )
+                if downsample
+                else ((num_channels + 1) * observation_shape[1] * observation_shape[2])
+            )
             self.rnd_scale = rnd_scale
             # It's important that the RND nets are NOT initiated with zero
-            self.rnd_network = mlp(self.input_size_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False, momentum=bn_mt)
-            self.rnd_target_network = mlp(self.input_size_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False, momentum=bn_mt)
+            self.value_rnd_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+                                         init_zero=False, momentum=bn_mt)
+            self.value_rnd_target_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+                                                init_zero=False, momentum=bn_mt)
+            self.reward_rnd_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+                                          init_zero=False, momentum=bn_mt)
+            self.reward_rnd_target_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+                                                 init_zero=False, momentum=bn_mt)
 
         if self.uncertainty_type == 'ensemble_ube' or self.uncertainty_type == 'rnd_ube':
             self.use_ube = True
@@ -767,11 +787,37 @@ class EfficientExploreNet(EfficientZeroNet):
         # I need to decide if UBE takes encoded_state or encoded_state and action
         return NotImplementedError
 
-    def compute_rnd_uncertainty(self, state):
-        state = state.view(-1, self.input_size_rnd)
-        return self.rnd_scale * torch.nn.functional.mse_loss(self.rnd_network(state),
-                                                             self.rnd_target_network(state),
+    def compute_value_rnd_uncertainty(self, state):
+        state = state.reshape(-1, self.input_size_value_rnd)
+        return self.rnd_scale * torch.nn.functional.mse_loss(self.value_rnd_network(state),
+                                                             self.value_rnd_target_network(state).detach(),
                                                              reduction='none').sum(dim=-1)
+
+    def compute_reward_rnd_uncertainty(self, state, action):
+        # Turn in a state_action vector
+        action_one_hot = (
+            torch.ones(
+                (
+                    state.shape[0],  # batch dimension
+                    1,  # channels dimension
+                    state.shape[2],  # H dim
+                    state.shape[3],  # W dim
+                )
+            )
+            .to(action.device)
+            .float()
+        )
+        action_one_hot = (
+                action[:, :, None, None] * action_one_hot / self.action_space_size
+        )
+        x = torch.cat((state, action_one_hot), dim=1)
+        # Reshape to flat FC input
+        x = x.reshape(-1, self.input_size_reward_rnd)
+        # Compute the RND uncertainty
+        return self.rnd_scale * torch.nn.functional.mse_loss(self.reward_rnd_network(x),
+                                                             self.reward_rnd_target_network(x).detach(),
+                                                             reduction='none').sum(dim=-1)
+
 
 class EnsembleDynamicsNetwork(DynamicsNetwork):
     def __init__(
@@ -787,7 +833,7 @@ class EnsembleDynamicsNetwork(DynamicsNetwork):
             init_zero=False,
             ensemble_size=2,
             use_network_prior=True,
-            prior_scale = 10,
+            prior_scale=10,
     ):
         """
             The EnsembleDynamicsNetwork shares the same architecture with the DynamicsNetwork, with the exception that
@@ -811,11 +857,15 @@ class EnsembleDynamicsNetwork(DynamicsNetwork):
 
         # self.bn_value_prefix_nets = nn.ModuleList([nn.BatchNorm1d(self.lstm_hidden_size, momentum=momentum) for _ in range(ensemble_size)])
         # self.bn_value_prefix = None # To make sure there are no unused params
-        self.fc_nets = nn.ModuleList([mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
+        self.fc_nets = nn.ModuleList(
+            [mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero, momentum=momentum) for
+             _ in range(ensemble_size)])
         self.fc = None  # To make sure there are no unused params
 
         if self.use_network_prior:
-            self.prior_fc_nets = nn.ModuleList([mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
+            self.prior_fc_nets = nn.ModuleList(
+                [mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero, momentum=momentum)
+                 for _ in range(ensemble_size)])
         else:
             self.prior_fc_nets = None
 
@@ -846,13 +896,14 @@ class EnsembleDynamicsNetwork(DynamicsNetwork):
         # value_prefix_list = [net(original_value_prefix) for net in self.bn_value_prefix_nets]
         # value_prefix_list = [nn.functional.relu(value_prefix) for value_prefix in value_prefix_list]
 
-        #Otherwise:
+        # Otherwise:
         value_prefix, reward_hidden = self.lstm(x, reward_hidden)
         value_prefix = value_prefix.squeeze(0)
         value_prefix = self.bn_value_prefix(value_prefix)
         value_prefix = nn.functional.relu(value_prefix)
         if self.use_network_prior:
-            value_prefix_list = [fc_net(value_prefix) + self.prior_scale * prior_fc_net(value_prefix.detach()).detach() for fc_net, prior_fc_net in zip(self.fc_nets, self.prior_fc_nets)]
+            value_prefix_list = [fc_net(value_prefix) + self.prior_scale * prior_fc_net(value_prefix.detach()).detach()
+                                 for fc_net, prior_fc_net in zip(self.fc_nets, self.prior_fc_nets)]
         else:
             value_prefix_list = [fc_net(value_prefix) for fc_net in self.fc_nets]
 
@@ -871,6 +922,7 @@ class EnsembleDynamicsNetwork(DynamicsNetwork):
         reward_mean = np.abs(reward_w_dist).mean()
 
         return return_reward_w_dist, reward_mean
+
 
 class EnsemblePredictionNetwork(PredictionNetwork):
     def __init__(
@@ -921,11 +973,14 @@ class EnsemblePredictionNetwork(PredictionNetwork):
         self.use_network_prior = use_network_prior
         # self.bn_value_nets = nn.ModuleList([nn.BatchNorm2d(reduced_channels_value, momentum=momentum) for _ in range(ensemble_size)])
         # self.bn_value = None
-        self.fc_value_nets = nn.ModuleList([mlp(self.block_output_size_value, fc_value_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
+        self.fc_value_nets = nn.ModuleList([mlp(self.block_output_size_value, fc_value_layers, full_support_size,
+                                                init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
         self.fc_value = None
 
         if self.use_network_prior:
-            self.prior_fc_value_nets = nn.ModuleList([mlp(self.block_output_size_value, fc_value_layers, full_support_size, init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
+            self.prior_fc_value_nets = nn.ModuleList([mlp(self.block_output_size_value, fc_value_layers,
+                                                          full_support_size, init_zero=init_zero, momentum=momentum) for
+                                                      _ in range(ensemble_size)])
         else:
             self.prior_fc_value_nets = None
 
@@ -959,13 +1014,16 @@ class EnsemblePredictionNetwork(PredictionNetwork):
         if self.bn_value is not None:
             if self.use_network_prior:
                 # This can also be done with torch.no_grad()
-                values = [fc_value_net(value) + self.prior_scale * prior_fc_value_net(value.detach()).detach() for fc_value_net, prior_fc_value_net in zip(self.fc_value_nets, self.prior_fc_value_nets)]
+                values = [fc_value_net(value) + self.prior_scale * prior_fc_value_net(value.detach()).detach() for
+                          fc_value_net, prior_fc_value_net in zip(self.fc_value_nets, self.prior_fc_value_nets)]
             else:
                 values = [fc_value_net(value) for fc_value_net in self.fc_value_nets]
         else:
             if self.use_network_prior:
                 # This can also be done with torch.no_grad()
-                values = [fc_value_net(value) + self.prior_scale * prior_fc_value_net(value.detach()).detach() for fc_value_net, prior_fc_value_net, value in zip(self.fc_value_nets, self.prior_fc_value_nets, values)]
+                values = [fc_value_net(value) + self.prior_scale * prior_fc_value_net(value.detach()).detach() for
+                          fc_value_net, prior_fc_value_net, value in
+                          zip(self.fc_value_nets, self.prior_fc_value_nets, values)]
             else:
                 values = [fc_value_net(value) for fc_value_net, value in zip(self.fc_value_nets, values)]
 
@@ -973,7 +1031,8 @@ class EnsemblePredictionNetwork(PredictionNetwork):
 
         return policy, values
 
-class FullyConnectedEfficientZeroNet(BaseNet):
+
+class FullyConnectedEfficientExploreNet(BaseNet):
     def __init__(self,
                  observation_shape,
                  action_space_size,
@@ -1011,7 +1070,8 @@ class FullyConnectedEfficientZeroNet(BaseNet):
             mapping_seed:
             randomize_actions:
         """
-        super(FullyConnectedEfficientZeroNet, self).__init__(inverse_value_transform, inverse_reward_transform, lstm_hidden_size)
+        super(FullyConnectedEfficientExploreNet, self).__init__(inverse_value_transform, inverse_reward_transform,
+                                                                lstm_hidden_size)
         self.proj_hid = proj_hid
         self.proj_out = proj_out
         self.pred_hid = pred_hid
@@ -1025,7 +1085,8 @@ class FullyConnectedEfficientZeroNet(BaseNet):
         self.dynamics_input_size = (observation_shape[0] + 1) * observation_shape[1] * observation_shape[2]
         # In this arch. the representation is the original observation
         self.representation_network = torch.nn.Identity()
-        self.policy_network = mlp(self.encoded_state_size, fc_policy_layers, action_space_size, init_zero=init_zero, momentum=momentum)
+        self.policy_network = mlp(self.encoded_state_size, fc_policy_layers, action_space_size, init_zero=init_zero,
+                                  momentum=momentum)
         self.value_network = mlp(self.encoded_state_size, fc_value_layers, value_support_size, init_zero=init_zero,
                                  momentum=momentum)
         self.learned_model = learned_model
@@ -1077,13 +1138,20 @@ class FullyConnectedEfficientZeroNet(BaseNet):
         )
 
         # RND
-        self.input_size_rnd = self.encoded_state_size
         self.rnd_scale = rnd_scale
+        self.input_size_value_rnd = self.encoded_state_size
+        self.input_size_reward_rnd = self.dynamics_input_size
         # It's important that the RND nets are NOT initiated with zero
-        self.rnd_network = mlp(self.input_size_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False,
-                               momentum=momentum)
-        self.rnd_target_network = mlp(self.input_size_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False,
+        self.reward_rnd_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False,
                                       momentum=momentum)
+        self.reward_rnd_target_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+                                             init_zero=False,
+                                             momentum=momentum)
+        self.value_rnd_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False,
+                                     momentum=momentum)
+        self.value_rnd_target_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+                                            init_zero=False,
+                                            momentum=momentum)
 
     def representation(self, observation):
         # Regardless of the number of stacked observations, we only pass the last
@@ -1147,11 +1215,37 @@ class FullyConnectedEfficientZeroNet(BaseNet):
         else:
             return proj.detach()
 
-    def compute_rnd_uncertainty(self, state):
-        state = state.reshape(-1, self.input_size_rnd)
-        return self.rnd_scale * torch.nn.functional.mse_loss(self.rnd_network(state),
-                                                             self.rnd_target_network(state),
+    def compute_value_rnd_uncertainty(self, state):
+        state = state.reshape(-1, self.input_size_value_rnd)
+        return self.rnd_scale * torch.nn.functional.mse_loss(self.value_rnd_network(state),
+                                                             self.value_rnd_target_network(state).detach(),
                                                              reduction='none').sum(dim=-1)
+
+    def compute_reward_rnd_uncertainty(self, state, action):
+        # Turn in a state_action vector
+        action_one_hot = (
+            torch.ones(
+                (
+                    state.shape[0],  # batch dimension
+                    1,  # channels dimension
+                    state.shape[2],  # H dim
+                    state.shape[3],  # W dim
+                )
+            )
+            .to(action.device)
+            .float()
+        )
+        action_one_hot = (
+                action[:, :, None, None] * action_one_hot / self.action_space_size
+        )
+        x = torch.cat((state, action_one_hot), dim=1)
+        # Reshape to flat FC input
+        x = x.reshape(-1, self.input_size_reward_rnd)
+        # Compute the RND uncertainty
+        return self.rnd_scale * torch.nn.functional.mse_loss(self.reward_rnd_network(x),
+                                                             self.reward_rnd_target_network(x).detach(),
+                                                             reduction='none').sum(dim=-1)
+
 
 class FullyConnectedDynamicsNetwork(nn.Module):
     def __init__(self,
@@ -1179,7 +1273,8 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         super().__init__()
         self.hidden_state_shape = hidden_state_shape
         self.dynamics_input_size = dynamics_input_size
-        self.state_prediction_net = mlp(dynamics_input_size, fc_state_prediction_layers, hidden_state_size, init_zero=init_zero,
+        self.state_prediction_net = mlp(dynamics_input_size, fc_state_prediction_layers, hidden_state_size,
+                                        init_zero=init_zero,
                                         momentum=momentum)
         # The input to the lstm is the concat tensor of hidden_state and action
         self.lstm = nn.LSTM(input_size=dynamics_input_size, hidden_size=lstm_hidden_size)
@@ -1227,6 +1322,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         reward_mean = np.abs(reward_w_dist).mean()
         return reward_w_dist, reward_mean
 
+
 class DeepSeaDynamicsNetwork(nn.Module):
     def __init__(self,
                  env_size,
@@ -1252,7 +1348,7 @@ class DeepSeaDynamicsNetwork(nn.Module):
         # self.true_model = DeepSea(size=env_size, mapping_seed=mapping_seed, seed=mapping_seed,
         #                           randomize_actions=randomize_actions)
         self.action_mapping = torch.from_numpy(DeepSea(size=env_size, mapping_seed=mapping_seed, seed=mapping_seed,
-                                  randomize_actions=randomize_actions)._action_mapping).long()
+                                                       randomize_actions=randomize_actions)._action_mapping).long()
         self.action_mapping = self.action_mapping * 2 - 1
 
     def forward(self, x, current_state, action, reward_hidden):
