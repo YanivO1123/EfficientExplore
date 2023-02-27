@@ -429,7 +429,10 @@ class BatchWorker_GPU(object):
             for i in range(slices):
                 beg_index = m_batch * i
                 end_index = m_batch * (i + 1)
-                m_obs = torch.from_numpy(value_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                if self.config.image_based:
+                    m_obs = torch.from_numpy(value_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                else:
+                    m_obs = torch.from_numpy(value_obs_lst[beg_index:end_index]).to(device).float()
                 if self.config.amp_type == 'torch_amp':
                     with autocast():
                         m_output = self.model.initial_inference(m_obs)
@@ -525,8 +528,15 @@ class BatchWorker_GPU(object):
             for i in range(slices):
                 beg_index = m_batch * i
                 end_index = m_batch * (i + 1)
-                m_obs = torch.from_numpy(value_obs_lst[beg_index:end_index]).to(device).float() / 255.0
-                m_obs_zero_step = torch.from_numpy(zero_step_value_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                if self.config.image_based:
+                    m_obs = torch.from_numpy(value_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                    m_obs_zero_step = torch.from_numpy(zero_step_value_obs_lst[beg_index:end_index]).to(
+                        device).float() / 255.0
+                else:
+                    m_obs = torch.from_numpy(value_obs_lst[beg_index:end_index]).to(device).float()
+                    m_obs_zero_step = torch.from_numpy(zero_step_value_obs_lst[beg_index:end_index]).to(
+                        device).float()
+
                 if self.config.amp_type == 'torch_amp':
                     with autocast():
                         m_output = self.model.initial_inference(m_obs)
@@ -663,7 +673,11 @@ class BatchWorker_GPU(object):
                 beg_index = m_batch * i
                 end_index = m_batch * (i + 1)
 
-                m_obs = torch.from_numpy(policy_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                if self.config.image_based:
+                    m_obs = torch.from_numpy(policy_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                else:
+                    m_obs = torch.from_numpy(policy_obs_lst[beg_index:end_index]).to(device).float()
+
                 if self.config.amp_type == 'torch_amp':
                     with autocast():
                         m_output = self.model.initial_inference(m_obs)
@@ -731,7 +745,11 @@ class BatchWorker_GPU(object):
                 beg_index = m_batch * i
                 end_index = m_batch * (i + 1)
 
-                m_obs = torch.from_numpy(policy_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                if self.config.image_based:
+                    m_obs = torch.from_numpy(policy_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                else:
+                    m_obs = torch.from_numpy(policy_obs_lst[beg_index:end_index]).to(device).float()
+
                 if self.config.amp_type == 'torch_amp':
                     with autocast():
                         m_output = self.model.initial_inference(m_obs)
@@ -834,7 +852,7 @@ class BatchWorker_GPU(object):
 
             # Go over this batch. look for targets that are diagonal, exploratory, and 0.0
             step_count = ray.get(self.storage.get_counter.remote())
-            if self.config.use_max_value_targets and 'deep_sea' in self.config.env_name and step_count % self.config.test_interval == 0:
+            if self.config.use_max_value_targets and 'deep_sea/0' in self.config.env_name and step_count % self.config.test_interval == 0:
                 try:
                     self.debug_deep_sea(batch_values, batch_policies, reward_value_context, max_targets, step_count)
                 except:

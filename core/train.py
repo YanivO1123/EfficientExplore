@@ -78,7 +78,10 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     # obs_batch is the observation for hat s_t (predicted hidden states from dynamics function)
     # obs_target_batch is the observations for s_t (hidden states from representation function)
     # to save GPU memory usage, obs_batch_ori contains (stack + unroll steps) frames
-    obs_batch_ori = torch.from_numpy(obs_batch_ori).to(config.device).float() / 255.0
+    if config.image_based:
+        obs_batch_ori = torch.from_numpy(obs_batch_ori).to(config.device).float() / 255.0
+    else:
+        obs_batch_ori = torch.from_numpy(obs_batch_ori).to(config.device).float()
     obs_batch = obs_batch_ori[:, 0: config.stacked_observations * config.image_channel, :, :]
     obs_target_batch = obs_batch_ori[:, config.image_channel:, :, :]
 
@@ -151,9 +154,9 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     # value RND loss:
     if (config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube') \
             and config.use_uncertainty_architecture:
-        rnd_loss = model.compute_value_rnd_uncertainty(hidden_state.detach()).mean()
+        rnd_loss = model.compute_value_rnd_uncertainty(hidden_state.detach())
     else:
-        rnd_loss = 0
+        rnd_loss = None
 
     target_value_prefix_cpu = target_value_prefix.detach().cpu()
     gradient_scale = 1 / config.num_unroll_steps
@@ -183,11 +186,11 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 if (config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube') \
                         and config.use_uncertainty_architecture:
                     # Compute value RND loss
-                    rnd_loss += model.compute_value_rnd_uncertainty(hidden_state.detach()).mean() * mask_batch[:, step_i]
+                    rnd_loss += model.compute_value_rnd_uncertainty(hidden_state.detach()) * mask_batch[:, step_i]
 
                     # Compute reward RND loss
                     action = action_batch[:, step_i]
-                    rnd_loss += model.compute_reward_rnd_uncertainty(hidden_state.detach(), action).mean() * mask_batch[:, step_i]
+                    rnd_loss += model.compute_reward_rnd_uncertainty(hidden_state.detach(), action) * mask_batch[:, step_i]
 
                 policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(1) * mask_batch[:, step_i]
                 value_loss += config.scalar_value_loss(value, target_value_phi[:, step_i + 1]) * mask_batch[:, step_i]
@@ -286,7 +289,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
             config.value_loss_coeff * value_loss + config.reward_loss_coeff * value_prefix_loss)
 
     if config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube':
-        weighted_loss = (weights * loss).mean() + rnd_loss
+        weighted_loss = (weights * loss).mean() + rnd_loss.mean()
     else:
         weighted_loss = (weights * loss).mean()
 

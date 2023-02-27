@@ -1216,7 +1216,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             return proj.detach()
 
     def compute_value_rnd_uncertainty(self, state):
-        state = state.reshape(-1, self.input_size_value_rnd)
+        state = state.reshape(-1, self.input_size_value_rnd).detach()
         return self.rnd_scale * torch.nn.functional.mse_loss(self.value_rnd_network(state),
                                                              self.value_rnd_target_network(state).detach(),
                                                              reduction='none').sum(dim=-1)
