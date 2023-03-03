@@ -99,6 +99,9 @@ if __name__ == '__main__':
     parser.add_argument('--alpha_zero_planning', action='store_true', default=False,
                         help="Only applied to deep_sea. If true, the dynamics model is not learned, but the true model "
                              "is used instead. Does not modify reward or value learning.")
+    parser.add_argument('--periodic_ube_weight_reset', action='store_true', default=False,
+                        help="If ube and periodic_ube_weight_reset, reset ube network weights every reset_ube_interval "
+                             "learning steps.")
     # parser.add_argument('--loss_uncertainty_weighting', action='store_true', default=False,
     #                     help="If true, weigh the value losses with uncertainty.")
 

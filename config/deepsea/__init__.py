@@ -20,7 +20,7 @@ class DeepSeaConfig(BaseConfig):
             vis_interval=100,   # 1000
             test_episodes=8, # 32,
             checkpoint_interval=20,    # 100
-            target_model_interval=200,  # 200
+            target_model_interval=100,  # 200
             save_ckpt_interval=10000,
             max_moves=10,   # Max moves are re-set in set_game to env_size
             test_max_moves=10,  # test_max_moves are re-set in set_game to env_size
@@ -47,7 +47,7 @@ class DeepSeaConfig(BaseConfig):
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=500,   # 500 400 32
+            start_transitions=1000,   # 500 400 32 5000
             total_transitions=40 * 1000,
             transition_num=1,
             do_consistency=False,
@@ -85,7 +85,7 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            count_based_ube=False,
+            reset_ube_interval=2 * 1000,
         )
         self.start_transitions = max(1, self.start_transitions)
 
@@ -119,7 +119,10 @@ class DeepSeaConfig(BaseConfig):
         # self.pb_c_init = 0.5 # 1.25
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
-        if self.change_temperature:
+        # With mu explore in deep sea, we don't want to rely on random action selection
+        if self.mu_explore:
+            return 0.1
+        elif self.change_temperature:
             if trained_steps < 0.5 * (self.training_steps):
                 return 1.0
             elif trained_steps < 0.75 * (self.training_steps):

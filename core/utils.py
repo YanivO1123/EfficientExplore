@@ -12,6 +12,8 @@ from bsuite.utils import gym_wrapper as bsuite_gym_wrapper
 
 from scipy.stats import entropy
 
+from torch import nn
+
 
 class LinearSchedule(object):
     def __init__(self, schedule_timesteps, final_p, initial_p=1.0):
@@ -370,3 +372,11 @@ def str_to_arr(s, gray_scale=False):
         arr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
     return arr
+
+@torch.no_grad()
+def weight_reset(m: nn.Module):
+    # Based on code from https://stackoverflow.com/questions/63627997/reset-parameters-of-a-neural-network-in-pytorch
+    # check if the current module has reset_parameters & if it's callable call it on m
+    reset_parameters = getattr(m, "reset_parameters", None)
+    if callable(reset_parameters):
+        m.reset_parameters()

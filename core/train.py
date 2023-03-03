@@ -16,9 +16,7 @@ from core.replay_buffer import ReplayBuffer
 from core.storage import SharedStorage, QueueStorage
 from core.selfplay_worker import DataWorker
 from core.reanalyze_worker import BatchWorker_GPU, BatchWorker_CPU
-from core.utils import uncertainty_to_loss_weight
-
-import core
+from core.utils import weight_reset, uncertainty_to_loss_weight
 
 from core.visitation_counter import CountUncertainty
 import traceback
@@ -464,6 +462,11 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             continue
         shared_storage.incr_counter.remote()
         lr = adjust_lr(config, optimizer, step_count)
+
+        # Reset ube weights if: condition
+        if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval == 0 \
+                and 'ube' in config.uncertainty_architecture_type:
+            model.ube_network.apply(fn=weight_reset)
 
         # update model for self-play
         if step_count % config.checkpoint_interval == 0:

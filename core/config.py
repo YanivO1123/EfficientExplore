@@ -92,6 +92,7 @@ class BaseConfig(object):
                  ube_loss_coeff: float = 2,
                  count_based_ube: bool = False,
                  num_simulations_ube: int = 30,
+                 reset_ube_interval: int = 1000 * 5,
                  # loss_uncertainty_weighting: bool = False,
                  ):
         """Base Config for EfficietnZero
@@ -263,6 +264,10 @@ class BaseConfig(object):
         loss_uncertainty_weighting: bool
             If True, weigh the value targets with the uncertainty. Uncertainty -> 0, weight -> 1. Uncertainty -> inf,
             weight -> 0.2.
+        reset_ube_interval: int
+            When step_count % config.reset_ube_interval == 0 reset the network parameters of UBE, to prevent
+            failure to adapt to new uncertainty scores.
+            If reset_ube_interval <= 0, don't reset ube weights.
         """
         # Self-Play
         self.action_space_size = None
@@ -397,6 +402,8 @@ class BaseConfig(object):
         self.ube_loss_coeff = ube_loss_coeff
         self.count_based_ube = count_based_ube
         self.num_simulations_ube = num_simulations_ube
+        self.reset_ube_interval = reset_ube_interval
+        self.periodic_ube_weight_reset = False
 
         # Deep sea for debugging
         self.deepsea_randomize_actions = True
@@ -548,7 +555,6 @@ class BaseConfig(object):
             self.use_visitation_counter = args.visit_counter
             # only use visit_counter in planning when it's enabled
             self.plan_with_visitation_counter = args.p_w_vis_counter and self.use_visitation_counter
-            self.count_based_ube = self.count_based_ube and self.plan_with_visitation_counter
             if self.plan_with_visitation_counter:
                 self.plan_with_fake_visit_counter = args.plan_w_fake_visit_counter
                 self.plan_with_state_visits = args.plan_w_state_visits
@@ -575,6 +581,11 @@ class BaseConfig(object):
         # Max value and policy targets can be used independently, but only with mu_explore
         self.use_max_value_targets = args.use_max_value_targets and self.mu_explore
         self.use_max_policy_targets = args.use_max_policy_targets and self.mu_explore
+
+        # UBE parameters:
+        if 'ube' in self.uncertainty_architecture_type:
+            self.periodic_ube_weight_reset = args.periodic_ube_weight_reset
+            self.count_based_ube = self.plan_with_visitation_counter
 
         # loss_uncertainty_weighting can only be used with a source of uncertainty
         # self.loss_uncertainty_weighting = args.loss_uncertainty_weighting and \
