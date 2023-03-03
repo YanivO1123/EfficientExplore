@@ -77,12 +77,12 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
         target_value_prefix, target_value, target_policy = targets_batch
         target_ube = None
 
-    if 'deep_sea/0' in config.env_name and step_count % config.test_interval == 0:
+    if 'deep_sea' in config.env_name and step_count % config.test_interval == 0:
         try:
             debug_train_deep_sea(obs_batch_ori, target_value, target_policy, target_value_prefix, mask_batch,
                                  config.seed, config.stacked_observations,
                                  config.batch_size, config.num_unroll_steps, step_count, action_batch,
-                                 target_ube)
+                                 target_ube, env_name=config.env_name)
         except:
             traceback.print_exc()
 
@@ -581,11 +581,11 @@ def train(config, summary_writer, model_path=None):
 
 def debug_train_deep_sea(observations_batch, values_targets_batch, policy_targets_batch, rewards_targets_batch,
                          mask_batch, action_mapping_seed, stacked_observations, batch_size, rollout_length,
-                         step_count, action_batch, ube_targets_batch):
+                         step_count, action_batch, ube_targets_batch, env_name):
     # Process the observations if necessary
     # observations_batch is of shape (batch_size, stacked_observations * unroll_size, h, w) [:, 0: config.stacked_observations * 3,:,:]
     # observations_batch = observations_batch
-    visitation_counter = CountUncertainty(name='deep_sea/0', num_envs=1, mapping_seed=action_mapping_seed)
+    visitation_counter = CountUncertainty(name=env_name, num_envs=1, mapping_seed=action_mapping_seed)
     # Search the batch for all states
     diagonal_observation_indexes = []
     diagonal_observations = []
@@ -617,6 +617,10 @@ def debug_train_deep_sea(observations_batch, values_targets_batch, policy_target
     print(f"step_count = {step_count}, Num targets total = {batch_size * (rollout_length + 1)}, ouf of are diagonal = {len(diagonal_observation_indexes)}")
     for index, state in zip(diagonal_observation_indexes, diagonal_observations):
         [i, j] = index
-        print(f"Trajectory = {i}, State: {state}, mask: {mask_batch[i, j - 1] if j > 0 else 1},"
-              f" value target: {values_targets_batch[i, j]}, reward target {rewards_targets_batch[i, j]},"
-              f" policy target: {policy_targets_batch[i, j]}, ube_target: {ube_targets_batch[i, j] if ube_targets_batch is not None else None}")# and action chose was: {action_batch[i, j] if }") # problematic because there's one less action
+        print(f"Trajectory = {i}, state: {state}, "
+              f"mask: {mask_batch[i, j - 1] if j > 0 else 1},"
+              f" value target: {values_targets_batch[i, j]}, "
+              f"reward target {rewards_targets_batch[i, j]},"
+              f" policy target: {policy_targets_batch[i, j]}, "
+              f"ube_target: {ube_targets_batch[i, j] if ube_targets_batch is not None else None}, "
+              f"action: {action_batch[i, j - 1] if j > 0 else 1}")
