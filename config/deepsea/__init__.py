@@ -19,8 +19,8 @@ class DeepSeaConfig(BaseConfig):
             log_interval=500,
             vis_interval=100,   # 1000
             test_episodes=8, # 32,
-            checkpoint_interval=20,    # 100
-            target_model_interval=100,  # 200
+            checkpoint_interval=100,    # 100
+            target_model_interval=200,  # 200
             save_ckpt_interval=10000,
             max_moves=10,   # Max moves are re-set in set_game to env_size
             test_max_moves=10,  # test_max_moves are re-set in set_game to env_size

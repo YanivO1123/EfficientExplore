@@ -122,7 +122,10 @@ class BaseNet(nn.Module):
         self.inverse_value_transform = inverse_value_transform
         self.inverse_reward_transform = inverse_reward_transform
         self.lstm_hidden_size = lstm_hidden_size
+        # To be specified as an input to uncertainty nets
         self.uncertainty_type = None
+        # To be computed in uncertainty nets that use RND
+        self.value_rnd_propagation_scale = None
 
     def prediction(self, state):
         raise NotImplementedError
@@ -191,10 +194,16 @@ class BaseNet(nn.Module):
                 value_prefix_variance = self.ensemble_prediction_to_variance(value_prefix).detach()
         # Case RND. The predictions of RND are detached because we don't want to train RND and UBE on the same losses
         elif 'rnd' in self.uncertainty_type:
+            assert self.value_rnd_propagation_scale is not None
             value_variance = self.compute_value_rnd_uncertainty(next_state.detach()).detach()
             if action is not None:
-                value_prefix_variance = self.compute_reward_rnd_uncertainty(previous_state.detach(),
+                # Compute reward-unc. as epistemic unc. associated with NEXT state as well as transition
+                # (previous state + action)
+                value_prefix_variance = value_variance + 0.1 * self.compute_reward_rnd_uncertainty(previous_state.detach(),
                                                                         action.detach()).detach()
+            # Give more weight to rnd_value_unc in the MCTS tree, for recognition of new states
+            # if not self.training:
+            #     value_variance = self.value_rnd_propagation_scale * self.compute_value_rnd_uncertainty(next_state.detach()).detach()
         # Case UBE with either. The prediction of UBE is not detached.
         if 'ube' in self.uncertainty_type:
             # We add the UBE uncertainty to the current value_variance. We squeeze ube_unc to return prediction of shape

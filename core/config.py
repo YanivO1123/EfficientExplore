@@ -82,7 +82,7 @@ class BaseConfig(object):
                  ensemble_size: int = 5,
                  use_network_prior: bool = False,
                  prior_scale: float = 10.0,
-                 beta: float = 1E+6,
+                 beta: float = 1,
                  disable_policy_in_exploration: bool = True,
                  training_ratio: float = 1,
                  use_max_value_targets: bool = False,
@@ -374,7 +374,7 @@ class BaseConfig(object):
         self.prior_scale = prior_scale
 
         # rnd
-        self.rnd_scale = 2
+        self.rnd_scale = 1 # 2
 
         # exploration
         self.mu_explore = mu_explore
@@ -532,6 +532,11 @@ class BaseConfig(object):
             if args.case == 'deep_sea':
                 self.ensemble_size = 10
                 self.start_transitions = max(self.start_transitions, self.batch_size)
+                # In deep sea w. MuExplore we want to update weights often in selfplay, to make the most of exploration
+                # As a result, we compute checkpoint_interval as once every full batched episode
+                self.checkpoint_interval = min(self.checkpoint_interval, self.p_mcts_num * self.env_size)
+                # We compute target_model_interval as once every 4 batched episodes.
+                self.target_model_interval = min(self.target_model_interval, 4 * self.p_mcts_num * self.env_size)
                 # self.proj_hid = 1024
                 # self.proj_out = 1024
                 # self.pred_hid = 512
@@ -586,6 +591,10 @@ class BaseConfig(object):
         if 'ube' in self.uncertainty_architecture_type:
             self.periodic_ube_weight_reset = args.periodic_ube_weight_reset
             self.count_based_ube = self.plan_with_visitation_counter
+            if args.case == 'deep_sea':
+                # Reset ube every N batched episodes
+                N = 20
+                self.reset_ube_interval = min(self.reset_ube_interval, N * self.p_mcts_num * self.env_size)
 
         # loss_uncertainty_weighting can only be used with a source of uncertainty
         # self.loss_uncertainty_weighting = args.loss_uncertainty_weighting and \

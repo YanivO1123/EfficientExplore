@@ -1223,13 +1223,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
     def compute_value_rnd_uncertainty(self, state):
         state = state.reshape(-1, self.input_size_value_rnd).detach()
-        if not self.training:
-            # If not training, we multiply the value of rnd_value prediction by the coefficient of a finite geometric
-            # series of length env_size and r = gamma ** 2, to simulate the high value unc. of unknown states
-            propagation_scale = 1 # self.value_rnd_propagation_scale
-        else:
-            propagation_scale = 1
-        return propagation_scale * self.rnd_scale * torch.nn.functional.mse_loss(self.value_rnd_network(state),
+        return self.rnd_scale * torch.nn.functional.mse_loss(self.value_rnd_network(state),
                                                              self.value_rnd_target_network(state).detach(),
                                                              reduction='none').sum(dim=-1)
 
