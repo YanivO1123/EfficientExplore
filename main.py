@@ -76,7 +76,8 @@ if __name__ == '__main__':
                         help="Use max targets in exploratory episodes. Only applicable with MuExplore. If not specified,"
                              "uses use_max_value_targets from the config (which defaults to false unless set otherwise)")
     parser.add_argument('--use_max_policy_targets', action='store_true', default=False,
-                        help="Use max policy targets from max value targets in exploratory episodes. Only applicable with MuExplore AND use_max_value_targets. If not specified,"
+                        help="Use max policy targets from max value targets in exploratory episodes. Only applicable "
+                             "with MuExplore AND use_max_value_targets. If not specified, "
                              "uses use_max_value_targets from the config (which defaults to false unless set otherwise)")
     parser.add_argument('--plan_w_fake_visit_counter', action='store_true', default=False,
                         help="For debugging. If true, unc. associated with rewarding state is always maximized")
@@ -98,6 +99,8 @@ if __name__ == '__main__':
     parser.add_argument('--alpha_zero_planning', action='store_true', default=False,
                         help="Only applied to deep_sea. If true, the dynamics model is not learned, but the true model "
                              "is used instead. Does not modify reward or value learning.")
+    # parser.add_argument('--loss_uncertainty_weighting', action='store_true', default=False,
+    #                     help="If true, weigh the value losses with uncertainty.")
 
 
 

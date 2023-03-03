@@ -88,8 +88,11 @@ class BaseConfig(object):
                  use_max_value_targets: bool = False,
                  use_max_policy_targets: bool = False,
                  sampling_times: int = 0,
+                 ube_td_steps: int = 5,
+                 ube_loss_coeff: float = 2,
+                 count_based_ube: bool = False,
+                 num_simulations_ube: int = 30,
                  # loss_uncertainty_weighting: bool = False,
-                 # q_values: bool = False,
                  ):
         """Base Config for EfficietnZero
         Parameters
@@ -248,11 +251,18 @@ class BaseConfig(object):
             EfficientZero.
         sampling_times: int
             If using the visitataion counter, and sampled value uncertainty propagation, how many times to sample.
+        ube_td_steps: int
+            td steps for bootstrapped value-uncertainty targets for UBE
+        ube_loss_coeff: float
+            coefficient of ube loss. ube gradients do not flow into the model. However, we want UBE to learn "faster"
+            than the value function, so we use coefficient that is larger than value coeff
+        count_based_ube: bool
+            Whether to use visitation counts as target for UBE. Defaults to false.
+        num_simulations_ube: int
+            The number of simulations to use to compute ube targets in reanalyze when root_value is used.
         loss_uncertainty_weighting: bool
             If True, weigh the value targets with the uncertainty. Uncertainty -> 0, weight -> 1. Uncertainty -> inf,
             weight -> 0.2.
-        q_values: bool
-            If true, MuZero's values functions are Q-functions instead.
         """
         # Self-Play
         self.action_space_size = None
@@ -382,13 +392,17 @@ class BaseConfig(object):
         # Uncertainty weighting of losses
         # self.loss_uncertainty_weighting = loss_uncertainty_weighting
 
+        # UBE hyper parameters
+        self.ube_td_steps = ube_td_steps
+        self.ube_loss_coeff = ube_loss_coeff
+        self.count_based_ube = count_based_ube
+        self.num_simulations_ube = num_simulations_ube
+
         # Deep sea for debugging
         self.deepsea_randomize_actions = True
         self.learned_model = True
         self.env_size = -1  # reset in set_game
         self.sampling_times = sampling_times
-
-        # self.q_values = q_values
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -534,10 +548,10 @@ class BaseConfig(object):
             self.use_visitation_counter = args.visit_counter
             # only use visit_counter in planning when it's enabled
             self.plan_with_visitation_counter = args.p_w_vis_counter and self.use_visitation_counter
+            self.count_based_ube = self.count_based_ube and self.plan_with_visitation_counter
             if self.plan_with_visitation_counter:
                 self.plan_with_fake_visit_counter = args.plan_w_fake_visit_counter
                 self.plan_with_state_visits = args.plan_w_state_visits
-            # self.q_values = args.q_values and args.architecture_type == 'fully_connected'
         self.use_uncertainty_architecture = args.uncertainty_architecture
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
         if args.case == 'deep_sea':
@@ -545,8 +559,6 @@ class BaseConfig(object):
             self.learned_model = not args.alpha_zero_planning
         else:
             self.architecture_type = 'resnet'
-        if self.architecture_type == 'fully_connected':
-            self.uncertainty_architecture_type = 'rnd'
         # MuExplore is only applicable with some uncertainty mechanism
         assert (args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter)) or (not args.mu_explore)
         self.sampling_times = args.sampling_times

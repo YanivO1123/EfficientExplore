@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from bsuite import sweep
 # from bsuite.environments.deep_sea import DeepSea
 from config.deepsea.extended_deep_sea import DeepSea
@@ -10,7 +11,7 @@ class CountUncertainty:
         Uncertainty will be scaled by 'scale'.
         Only implemented for the deep_sea environment
     """
-    def __init__(self, name, num_envs, mapping_seed, scale=1, epsilon=1E-7, fake=False, randomize_actions=True):
+    def __init__(self, name, num_envs, mapping_seed, scale=1, epsilon=0.001, fake=False, randomize_actions=True):
         """
             name: the name of the env (deep_sea/N)
             num_envs: num of parallel envs for planning with MCTS
@@ -34,6 +35,7 @@ class CountUncertainty:
         self.observation_counter = 0
         self.rewarding_transition = self.identify_rewarding_transition()
         self.fake_reward_uncertainty = fake
+        self.action_mapping = self.planning_env._action_mapping * 2 - 1
 
     def identify_rewarding_transition(self):
         """
@@ -56,7 +58,7 @@ class CountUncertainty:
             Takes a numpy array, one-hot encoded state of shape (h, w) and returns the indexes of the 1 in the encoding
             If state is the "null state" (all zeros), returns negative indexes
         """
-        if len(np.shape(state)) == 2:
+        if len(np.shape(state)) == 2:   # If state is of shape [N, N]
             # If the given state is the "null state" (outside of env bounds)
             if not state.any():
                 return -1, -1
@@ -64,16 +66,28 @@ class CountUncertainty:
                 indexes = (state == 1).nonzero()
                 index_row, index_column = indexes[0][0], indexes[1][0]
                 return index_row, index_column
-        elif len(np.shape(state)) == 3:
-            # If the given state is the "null state" (outside of env bounds)
-            indexes_of_states = []
-            for i in range(np.shape(state)[0]):
-                if not state[i].any():
-                    indexes_of_states.append([-1, -1])
-                else:
-                    indexes = (state[i] == 1).nonzero()
-                    index_row, index_column = indexes[0][0], indexes[1][0]
-                    indexes_of_states.append([index_row, index_column])
+        elif len(np.shape(state)) == 3:     # If state is of shape [B, N, N]
+            # Flatten 1 hot representation
+            state = np.asarray(state)
+            batch_size = np.shape(state)[0]
+            N = np.shape(state)[-1]
+            # Flatten 1 hot representation
+            flattened_batched_state = state.reshape((batch_size, N * N))
+            # Get the indexes of the 1 hot along the B dimension, and shape them to 1 dim vectors of size batch_size
+            rows, columns = (flattened_batched_state.argmax(axis=1) // N).astype(dtype=int).squeeze(), (
+                    flattened_batched_state.argmax(axis=1) % N).astype(dtype=int).squeeze()
+            indexes_of_states = np.stack((rows, columns), axis=1)
+
+            # Unvectorized code
+            # indexes_of_states = []
+            # for i in range(batch_size):
+            #     if not state[i].any():
+            #         # If the given state is the "null state" (outside of env bounds)
+            #         indexes_of_states.append([-1, -1])
+            #     else:
+            #         indexes = (state[i] == 1).nonzero()
+            #         index_row, index_column = indexes[0][0], indexes[1][0]
+            #         indexes_of_states.append([index_row, index_column])
             return indexes_of_states
         else:
             raise ValueError(f"from_one_hot_state_to_indexes is not ")
@@ -103,12 +117,14 @@ class CountUncertainty:
             Expects a states numpy array of shape (num_envs, w, h) and actions a list of length num_envs
         """
         assert len(np.shape(states)) == 3
-        assert len(actions) == np.shape(states)[0] == self.num_envs
+        assert len(actions) == np.shape(states)[0]
+
+        batch_size = np.shape(states)[0]
 
         # Identify the rows and columns for each state
-        indexes = [(self.from_one_hot_state_to_indexes(states[i])) for i in range(self.num_envs)]
+        indexes = [(self.from_one_hot_state_to_indexes(states[i])) for i in range(batch_size)]
         next_observations = []
-        for i in range(self.num_envs):
+        for i in range(batch_size):
             # If this is the null state, can just retain the null state
             if indexes[i][0] < 0 or indexes[i][1] < 0:
                 next_observations.append(states[i])
@@ -133,10 +149,67 @@ class CountUncertainty:
         """
         # If shape of indexes = (num_envs, 2)
         if len(np.shape(indexes)) == 2:
-            assert len(actions) == np.shape(indexes)[0] == self.num_envs
+            assert len(actions) == np.shape(indexes)[0]
+
+            # Vectorized code is somehow slower. Using non-vectorized code instead
+
+            # # Vectorized code
+            # batch_size = np.shape(indexes)[0]
+            # N = self.size
+            #
+            # indexes = np.asarray(indexes)
+            #
+            # # Switch actions to -1, +1
+            # batched_actions = np.asarray(actions).squeeze() * 2 - 1
+            #
+            # # action_mapping expected to already be in the form -1, +1, this line is here for logic
+            # # self.action_mapping = self.planning_env._action_mapping * 2 - 1
+            #
+            # # Expand the action mapping
+            # action_mapping = np.expand_dims(self.action_mapping, axis=0)
+            # action_mapping = np.tile(action_mapping, (batch_size, 1, 1))
+            #
+            # # Flatten to shape [B, N * N]
+            # flattened_action_mapping = action_mapping.reshape(batch_size, N * N)
+            #
+            # rows, columns = indexes[:, 0], indexes[:, 1]
+            #
+            # # Get all the actions_right with gather in the flattened (row, col) indexes.
+            # flattened_indexes = rows * N + columns
+            # # actions_right should be of shape [B]
+            # actions_right = flattened_action_mapping.take(flattened_indexes)
+            #
+            # # All states go down 1 row
+            # rows = rows + 1
+            #
+            # # Change the actions right from which action is right to what needs to happen to column.
+            # # This is done by -1 * -1 = move one to the right, -1 * 1 = move 1 to the left
+            # change_in_column = actions_right * batched_actions
+            #
+            # # Change the column values
+            # columns = np.clip(columns + change_in_column, a_min=0, a_max=None)
+            #
+            # # 1-hot the rows and column back into a tensor for shape [B, (N + 1) x (N + 1)]
+            # flattened_batched_next_states = np.zeros((batch_size, (N + 1) * (N + 1)))
+            # indexes = np.expand_dims(rows, axis=1) * (N + 1) + np.expand_dims(columns, axis=1)
+            # np.put_along_axis(flattened_batched_next_states, indices=indexes, values=1, axis=1)
+            #
+            # # Reshape tensor back to B, 1, (N + 1), (N + 1)
+            # batched_next_states = flattened_batched_next_states.reshape((batch_size, N + 1, N + 1))
+            # # Return the top "corner" of size N x N
+            # batched_next_states = batched_next_states[:, :-1, :-1]
+            #
+            # # Transform back to indexes
+            # next_observations_indexes = self.from_one_hot_state_to_indexes(batched_next_states)
+            #
+            # # return
+            # return next_observations_indexes
+
+            # Unvectorized code
+            batch_size = np.shape(indexes)[0]
             # Identify the rows and columns for each state
             next_observations_indexes = []
-            for i in range(self.num_envs):
+            for i in range(batch_size):
                 # If this is the last state or the null state append null state
                 if indexes[i][0] >= self.size:
                     next_observations_indexes.append([indexes[i][0], indexes[i][1]])
@@ -196,14 +269,31 @@ class CountUncertainty:
                 returns the uncertainty of the state action pair
             Does not change the counters.
         """
-        # If the state is just one state in indexes form [row, col]
-        if len(np.shape(state)) == 1:
-            return self.state_action_uncertainty(state[0], state[1], action, use_state_visits)
-        elif np.shape(state) == (self.num_envs, 2):
+        # If state is a tensor of shape [B, S x C, H, W]:
+        if len(np.shape(state)) == 4:
+            # First we need to rework this to shape [B, -1, H, W]
+            state = state[:, -1, :, :]
+            # Make sure the new shape is [B, H, W]
+            state = state.squeeze()
+            # Then we need to get the indexes
+            state = self.from_one_hot_state_to_indexes(state)
+            # Finally, compute the uncertainty for each state
             reward_uncertainties = []
-            assert len(action) == self.num_envs  # verify that the number of actions matches the number of states
-            for i in range(self.num_envs):
-                reward_uncertainties.append(self.state_action_uncertainty(state[i][0], state[i][1], action[i], use_state_visits=use_state_visits))
+            for i in range(len(state)):
+                row, column = state[i]
+                reward_uncertainty = self.state_action_uncertainty(row, column, action[i])
+                reward_uncertainties.append(reward_uncertainty)
+            return np.asarray(reward_uncertainties)
+        # If the state is just one state in indexes form [row, col]
+        elif len(np.shape(state)) == 1:
+            return self.state_action_uncertainty(state[0], state[1], action, use_state_visits)
+        elif len(np.shape(state)) == 2:
+            reward_uncertainties = []
+            assert len(action) == np.shape(state)[0]  # verify that the number of actions matches the number of states
+            batch_size = np.shape(state)[0]
+            for i in range(batch_size):
+                reward_uncertainties.append(self.state_action_uncertainty(state[i][0], state[i][1], action[i],
+                                                                          use_state_visits=use_state_visits))
             return np.asarray(reward_uncertainties)
         else:
             raise ValueError(f"get_reward_uncertainty is only implemented for states of shape "
@@ -222,19 +312,20 @@ class CountUncertainty:
             If state is a tensor of shape (height, width):
                 evaluate the reward-uncertainty for each action, and return the average
         """
-        if np.shape(state) == (self.num_envs, 2):
+        if len(np.shape(state)) == 2:
+            batch_size = np.shape(state)[0]
             # find horizon:
             h = self.size
             # get individual rows from each state:
-            current_rows = [state[i][0] for i in range(self.num_envs)]
+            current_rows = [state[i][0] for i in range(batch_size)]
             # The horizons are size - row if row is in env, otherwise 0
             per_env_horizons = [h - current if current > 0 else 0 for current in current_rows]
             # compute the discount factors for each value-uncertainty
             # discount_factors = np.asarray([(1 - self.gamma ** (2 * horizon)) / (1 - self.gamma ** 2)
             #                     for horizon in per_env_horizons])
             # compute the uncertainties for each action
-            first_actions = [0] * self.num_envs
-            second_actions = [1] * self.num_envs
+            first_actions = [0] * batch_size
+            second_actions = [1] * batch_size
             reward_uncertainties_first_action = self.get_reward_uncertainty(state, first_actions, use_state_visits)
             reward_uncertainties_second_action = self.get_reward_uncertainty(state, second_actions, use_state_visits)
             result = per_env_horizons * np.maximum(reward_uncertainties_first_action, reward_uncertainties_second_action)
@@ -261,15 +352,37 @@ class CountUncertainty:
                 If > 0, do stochastic MC up to horizon propagation_horizon of number sampling_times
                 If <= 0, do a complete tree of depth propagation_horizon
         """
-        assert np.shape(state) == (self.num_envs, 2)
-        if sampling_times > 0:
-            samples = []
-            for i in range(sampling_times):
-                propagated_uncertainty = self.sampled_recursive_propagated_uncertainty(np.asarray(state), propagation_horizon, use_state_visits)
-                samples.append(propagated_uncertainty)
-            propagated_uncertainty = np.stack(samples, axis=0).max(axis=0)
+        if len(np.shape(state)) == 4:   # If shape = [B, C * S, H, W]
+            np.asarray(state)
+            # First we need to rework this to shape [B, 1, H, W] by taking the last observation in S * C
+            # Because C = 1 and S is stacked obs.
+            state = state[:, -1, :, :]
+            # Make sure the new shape is [B, H, W]
+            state = state.squeeze()
+            # Then we need to get the indexes
+            state = self.from_one_hot_state_to_indexes(state)
+            # Finally, we can compute the unc.
+            if sampling_times > 0:
+                samples = []
+                for i in range(sampling_times):
+                    propagated_uncertainty = self.sampled_recursive_propagated_uncertainty(state, propagation_horizon, use_state_visits)
+                    samples.append(propagated_uncertainty)
+                propagated_uncertainty = np.stack(samples, axis=0).max(axis=0)
+            else:
+                propagated_uncertainty = self.recursive_propagated_uncertainty(np.asarray(state), propagation_horizon, use_state_visits)
+        elif len(np.shape(state)) == 2:
+            if sampling_times > 0:
+                samples = []
+                for i in range(sampling_times):
+                    propagated_uncertainty = self.sampled_recursive_propagated_uncertainty(np.asarray(state), propagation_horizon, use_state_visits)
+                    samples.append(propagated_uncertainty)
+                propagated_uncertainty = np.stack(samples, axis=0).max(axis=0)
+            else:
+                propagated_uncertainty = self.recursive_propagated_uncertainty(np.asarray(state), propagation_horizon, use_state_visits)
         else:
-            propagated_uncertainty = self.recursive_propagated_uncertainty(np.asarray(state), propagation_horizon, use_state_visits)
+            raise ValueError(f"get_propagated_value_uncertainty not implemented for received state shape. "
+                             f"get_propagated_value_uncertainty is implemented for len(np.shape(state)) = 4 or = 2, "
+                             f"but np.shape(state) was {np.shape(state)}")
         return propagated_uncertainty
 
     def recursive_propagated_uncertainty(self, state, propagation_horizon, use_state_visits=False):
@@ -280,13 +393,18 @@ class CountUncertainty:
         if propagation_horizon == 0 or min(state[:, 0]) >= self.observation_space_shape[0] - 1:
             return np.asarray(self.get_surface_value_uncertainty(state, use_state_visits))
         else:
-            left_reward_uncertainty = self.get_reward_uncertainty(state, [0 for _ in range(self.num_envs)], use_state_visits)
-            right_reward_uncertainty = self.get_reward_uncertainty(state, [1 for _ in range(self.num_envs)], use_state_visits)
-            left_next_state = self.get_next_true_observation_indexes(state, actions=[0 for _ in range(self.num_envs)])
-            right_next_state = self.get_next_true_observation_indexes(state, actions=[1 for _ in range(self.num_envs)])
+            batch_size = np.shape(state)[0]
+            left_reward_uncertainty = self.get_reward_uncertainty(state, [0 for _ in range(batch_size)], use_state_visits)
+            right_reward_uncertainty = self.get_reward_uncertainty(state, [1 for _ in range(batch_size)], use_state_visits)
+            left_next_state = self.get_next_true_observation_indexes(state, actions=[0 for _ in range(batch_size)])
+            right_next_state = self.get_next_true_observation_indexes(state, actions=[1 for _ in range(batch_size)])
             return np.maximum(
-                left_reward_uncertainty + self.recursive_propagated_uncertainty(left_next_state, propagation_horizon - 1, use_state_visits),
-                right_reward_uncertainty + self.recursive_propagated_uncertainty(right_next_state, propagation_horizon - 1, use_state_visits),
+                left_reward_uncertainty + self.recursive_propagated_uncertainty(left_next_state,
+                                                                                propagation_horizon - 1,
+                                                                                use_state_visits),
+                right_reward_uncertainty + self.recursive_propagated_uncertainty(right_next_state,
+                                                                                 propagation_horizon - 1,
+                                                                                 use_state_visits)
             )
 
     def sampled_recursive_propagated_uncertainty(self, state, propagation_horizon, use_state_visits):
@@ -297,7 +415,10 @@ class CountUncertainty:
         if propagation_horizon == 0 or min(state[:, 0]) >= self.observation_space_shape[0]:
             return np.asarray(self.get_surface_value_uncertainty(state, use_state_visits))
         else:
-            actions = [np.random.randint(low=0,high=2) for _ in range(self.num_envs)]
+            batch_size = np.shape(state)[0]
+            actions = [np.random.randint(low=0, high=2) for _ in range(batch_size)]
             local_reward_uncertainty = self.get_reward_uncertainty(state, actions, use_state_visits)
             sampled_next_state = self.get_next_true_observation_indexes(state, actions=actions)
-            return local_reward_uncertainty + self.sampled_recursive_propagated_uncertainty(sampled_next_state, propagation_horizon - 1, use_state_visits)
+            return local_reward_uncertainty + self.sampled_recursive_propagated_uncertainty(sampled_next_state,
+                                                                                            propagation_horizon - 1,
+                                                                                            use_state_visits)

@@ -12,7 +12,7 @@ class MCTS(object):
     def __init__(self, config):
         self.config = config
 
-    def search(self, roots, model, hidden_state_roots, reward_hidden_roots, acting=False):
+    def search(self, roots, model, hidden_state_roots, reward_hidden_roots, acting=False, propagating_uncertainty=False):
         """Do MCTS for the roots (a batch of root nodes in parallel). Parallel in model inference
         Parameters
         ----------
@@ -26,6 +26,9 @@ class MCTS(object):
             the value prefix hidden states in LSTM of the roots
         acting: bool
             Distinguishes between acting in the environment (True) and training (False)
+        propagating_uncertainty: bool
+            If true, instead of running standard MuZero MCTS with reward and value and discount, runs MuZero MCTS with
+            reward_uncertainty, value_uncertainty, and discount ** 2
         """
         with torch.no_grad():
             model.eval()
@@ -47,7 +50,7 @@ class MCTS(object):
             min_max_stats_lst.set_delta(self.config.value_delta_max)
             horizons = self.config.lstm_horizon_len
 
-            for index_simulation in range(self.config.num_simulations):
+            for index_simulation in range(self.config.num_simulations if not propagating_uncertainty else self.config.num_simulations_ube):
                 hidden_states = []
                 hidden_states_c_reward = []
                 hidden_states_h_reward = []
@@ -108,11 +111,21 @@ class MCTS(object):
                 if self.config.mu_explore and acting and self.config.use_uncertainty_architecture:
                     if self.config.disable_policy_in_exploration:
                         len_logits = len(policy_logits_pool[0])
-                        policy_logits_pool = [policy_logits_pool[0]] + [[1.0] * len_logits for _ in range(len(policy_logits_pool) - 1)]
+                        policy_logits_pool = [policy_logits_pool[0]] + [[1.0] * len_logits
+                                                                        for _ in range(len(policy_logits_pool) - 1)]
                     tree.uncertainty_batch_back_propagate(hidden_state_index_x, discount,
                                               value_prefix_pool, value_pool, policy_logits_pool,
                                               min_max_stats_lst, results, is_reset_lst,
                                               value_prefix_variance_pool, value_variance_pool, num_exploratory)
+                # If we are calling search from reanalyze to generate new UBE targets, we propagate uncertainty instead
+                # of values and rewards
+                elif self.config.mu_explore and self.config.use_uncertainty_architecture and propagating_uncertainty \
+                        and not acting:
+                    assert value_prefix_variance_pool is not None and value_variance_pool is not None
+                    # backpropagation along the search path to update the attributes
+                    tree.batch_back_propagate(hidden_state_index_x, discount ** 2,
+                                              value_prefix_variance_pool, value_variance_pool, policy_logits_pool,
+                                              min_max_stats_lst, results, is_reset_lst)
                 else:
                     # backpropagation along the search path to update the attributes
                     tree.batch_back_propagate(hidden_state_index_x, discount,
@@ -199,14 +212,6 @@ class MCTS(object):
                 true_observations = np.asarray(true_observations)
                 # Compute the next true observation and keep track of it
                 true_observations_nodes = visitation_counter.get_next_true_observation_indexes(true_observations, last_actions)
-                # Compute the uncertainties based on the visitation counter
-                if self.config.plan_with_visitation_counter:
-                    value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations, last_actions, use_state_visits=use_state_visits).tolist()
-                    # Compute the PROPAGATED value uncertainty, by doing Monte-Carlo sims with the real model for sampling_times sims, up to horizon propagation_horizon
-                    value_variance_pool = visitation_counter.get_propagated_value_uncertainty(true_observations,
-                                                                                              propagation_horizon=value_propagation_horizon,
-                                                                                              sampling_times=sampling_times,
-                                                                                              use_state_visits=use_state_visits).tolist()
 
                 last_actions = torch.from_numpy(np.asarray(last_actions)).to(device).unsqueeze(1).long()
 
@@ -222,8 +227,28 @@ class MCTS(object):
                 value_pool = network_output.value.reshape(-1).tolist()
                 policy_logits_pool = network_output.policy_logits.tolist()
                 reward_hidden_nodes = network_output.reward_hidden
-                # MuExplore: If I want to evaluate ensembles while state counter is running, can uncomment these lines
-                if not self.config.plan_with_visitation_counter:
+
+                # MuExplore: Compute the uncertainties
+                # If we use visitation counter AND ube the value unc. is the sum of surface count-value unc. +
+                if self.config.plan_with_visitation_counter and 'ube' in self.config.uncertainty_architecture_type:
+                    value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations,
+                                                                                           last_actions,
+                                                                                           use_state_visits=use_state_visits).tolist()
+                    value_variance_pool = visitation_counter.get_surface_value_uncertainty(true_observations,
+                                                                                              use_state_visits=use_state_visits)
+                    value_variance_pool = (value_variance_pool + network_output.value_variance.reshape(-1)).tolist()
+                # Otherwise, if we use visitation counter use propagated value unc. estimate from the visitation count
+                elif self.config.plan_with_visitation_counter:
+                    value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations,
+                                                                                           last_actions,
+                                                                                           use_state_visits=use_state_visits).tolist()
+                    # Compute the PROPAGATED value uncertainty, by doing Monte-Carlo sims with the real model for sampling_times sims, up to horizon propagation_horizon
+                    value_variance_pool = visitation_counter.get_propagated_value_uncertainty(true_observations,
+                                                                                              propagation_horizon=value_propagation_horizon,
+                                                                                              sampling_times=sampling_times,
+                                                                                              use_state_visits=use_state_visits).tolist()
+                # If we don't plan with the visitation count, use the output of the network
+                else:
                     value_prefix_variance_pool = network_output.value_prefix_variance.reshape(-1).tolist() if network_output.value_prefix_variance is not None else None
                     value_variance_pool = network_output.value_variance.reshape(-1).tolist() if network_output.value_variance is not None else None
 

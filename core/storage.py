@@ -2,6 +2,8 @@ import ray
 
 from ray.util.queue import Queue
 
+import copy
+
 
 class QueueStorage(object):
     def __init__(self, threshold=15, size=20):
@@ -56,6 +58,22 @@ class SharedStorage(object):
         self.priority_self_play_log = []
         self.distributions_log = {}
         self.start = False
+
+        self.state_count = None
+        self.state_action_count = None
+
+    def get_counts(self):
+        """
+        Functionality to share visitation counts between workers
+        """
+        return copy.deepcopy(self.state_count), copy.deepcopy(self.state_action_count)
+
+    def set_counts(self, state_count, state_action_count):
+        """
+        Functionality to share visitation counts between workers
+        """
+        self.state_count = state_count
+        self.state_action_count = state_action_count
 
     def set_start_signal(self):
         self.start = True

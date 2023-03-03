@@ -758,8 +758,6 @@ class EfficientExploreNet(EfficientZeroNet):
             self.ube_network = None
             raise NotImplementedError
 
-
-    #TODO: Complete this function, and move it because it probably doesnt belong here.
     def ensemble_prediction_to_variance(self, logits):
         if not isinstance(logits, list):
             return None
@@ -782,8 +780,7 @@ class EfficientExploreNet(EfficientZeroNet):
 
             return scalar_variance
 
-    # TODO: Complete the UBE prediction computation
-    def ube(self, encoded_state, action):
+    def ube(self, state):
         # I need to decide if UBE takes encoded_state or encoded_state and action
         return NotImplementedError
 
@@ -1041,6 +1038,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  fc_value_layers,
                  fc_policy_layers,
                  fc_rnd_layers,
+                 fc_ube_layers,
                  reward_support_size,
                  value_support_size,
                  inverse_value_transform,
@@ -1058,9 +1056,10 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  mapping_seed=0,
                  randomize_actions=True,
                  uncertainty_type='rnd',
+                 discount=0.997,
                  ):
         """
-            FullyConnected (or, non-resnet) EfficientZero network.
+            FullyConnected (more precisely non-resnet) EfficientZero network.
             Parameters
             __________
             observation_shape: tuple or list
@@ -1142,7 +1141,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         self.input_size_value_rnd = self.encoded_state_size
         self.input_size_reward_rnd = self.dynamics_input_size
         # It's important that the RND nets are NOT initiated with zero
-        self.reward_rnd_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1], init_zero=False,
+        self.reward_rnd_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+                                      init_zero=False,
                                       momentum=momentum)
         self.reward_rnd_target_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
                                              init_zero=False,
@@ -1152,6 +1152,12 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         self.value_rnd_target_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
                                             init_zero=False,
                                             momentum=momentum)
+        # The value_rnd_unc_prop coeff is the sum of a geometric series with r = gamma ** 2 and n = env_size
+        self.value_rnd_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
+        if self.uncertainty_type == 'rnd_ube':
+            self.use_ube = True
+            self.ube_network = mlp(self.encoded_state_size, fc_ube_layers, 1,
+                                   init_zero=init_zero, momentum=momentum)
 
     def representation(self, observation):
         # Regardless of the number of stacked observations, we only pass the last
@@ -1176,10 +1182,10 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         action_one_hot = (
             torch.ones(
                 (
-                    encoded_state.shape[0],     # batch dimension
-                    1,                          # channels dimension
-                    encoded_state.shape[2],     # H dim
-                    encoded_state.shape[3],     # W dim
+                    encoded_state.shape[0],  # batch dimension
+                    1,  # channels dimension
+                    encoded_state.shape[2],  # H dim
+                    encoded_state.shape[3],  # W dim
                 )
             )
             .to(action.device)
@@ -1217,7 +1223,13 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
     def compute_value_rnd_uncertainty(self, state):
         state = state.reshape(-1, self.input_size_value_rnd).detach()
-        return self.rnd_scale * torch.nn.functional.mse_loss(self.value_rnd_network(state),
+        if not self.training:
+            # If not training, we multiply the value of rnd_value prediction by the coefficient of a finite geometric
+            # series of length env_size and r = gamma ** 2, to simulate the high value unc. of unknown states
+            propagation_scale = 1 # self.value_rnd_propagation_scale
+        else:
+            propagation_scale = 1
+        return propagation_scale * self.rnd_scale * torch.nn.functional.mse_loss(self.value_rnd_network(state),
                                                              self.value_rnd_target_network(state).detach(),
                                                              reduction='none').sum(dim=-1)
 
@@ -1246,6 +1258,15 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                                                              self.reward_rnd_target_network(x).detach(),
                                                              reduction='none').sum(dim=-1)
 
+    def compute_ube_uncertainty(self, state):
+        """
+            Returns the value-uncertainty prediction from the UBE network (See UBE paper
+            https://arxiv.org/pdf/1709.05380.pdf). The state is always detached, because we don't want the UBE
+            prediction to train the learned dynamics and representation networks.
+        """
+        state = state.reshape(-1, self.encoded_state_size).detach()
+        # We squeeze the result to return tensor of shape [B] instead of [B, 1]
+        return self.ube_network(state).squeeze()
 
 class FullyConnectedDynamicsNetwork(nn.Module):
     def __init__(self,

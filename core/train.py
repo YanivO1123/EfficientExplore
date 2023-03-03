@@ -16,6 +16,7 @@ from core.replay_buffer import ReplayBuffer
 from core.storage import SharedStorage, QueueStorage
 from core.selfplay_worker import DataWorker
 from core.reanalyze_worker import BatchWorker_GPU, BatchWorker_CPU
+from core.utils import uncertainty_to_loss_weight
 
 import core
 
@@ -63,13 +64,25 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     """
     inputs_batch, targets_batch = batch
     obs_batch_ori, action_batch, mask_batch, indices, weights_lst, make_time = inputs_batch
-    target_value_prefix, target_value, target_policy = targets_batch
+    # if config.loss_uncertainty_weighting:
+    #     target_value_prefix, target_value, target_policy, target_value_uncertainties = targets_batch
+    #     value_loss_weights = uncertainty_to_loss_weight(target_value_uncertainties)
+    # else:
+    #     target_value_prefix, target_value, target_policy = targets_batch
 
-    if 'deep_sea' in config.env_name and step_count % config.test_interval == 0 and False:
+    if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
+        target_value_prefix, target_value, target_policy, target_ube = targets_batch
+        target_ube = torch.from_numpy(target_ube).to(config.device).float()
+    else:
+        target_value_prefix, target_value, target_policy = targets_batch
+        target_ube = None
+
+    if 'deep_sea/0' in config.env_name and step_count % config.test_interval == 0:
         try:
             debug_train_deep_sea(obs_batch_ori, target_value, target_policy, target_value_prefix, mask_batch,
                                  config.seed, config.stacked_observations,
-                                 config.batch_size, config.num_unroll_steps, step_count, action_batch)
+                                 config.batch_size, config.num_unroll_steps, step_count, action_batch,
+                                 target_ube)
         except:
             traceback.print_exc()
 
@@ -97,6 +110,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     target_value = torch.from_numpy(target_value).to(config.device).float()
     target_policy = torch.from_numpy(target_policy).to(config.device).float()
     weights = torch.from_numpy(weights_lst).to(config.device).float()
+    # Targets UBE already from_numpy-ed above
 
     batch_size = obs_batch.size(0)
     assert batch_size == config.batch_size == target_value_prefix.size(0)
@@ -156,7 +170,14 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
             and config.use_uncertainty_architecture:
         rnd_loss = model.compute_value_rnd_uncertainty(hidden_state.detach())
     else:
-        rnd_loss = None
+        rnd_loss = torch.zeros(batch_size)
+
+    # UBE loss
+    if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
+        ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
+        ube_loss = config.ube_loss(ube_prediction, target_ube[:, 0])
+    else:
+        ube_loss = torch.zeros(batch_size)
 
     target_value_prefix_cpu = target_value_prefix.detach().cpu()
     gradient_scale = 1 / config.num_unroll_steps
@@ -183,14 +204,17 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                     consistency_loss += temp_loss
 
-                if (config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube') \
-                        and config.use_uncertainty_architecture:
+                if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                     # Compute value RND loss
                     rnd_loss += model.compute_value_rnd_uncertainty(hidden_state.detach()) * mask_batch[:, step_i]
 
                     # Compute reward RND loss
                     action = action_batch[:, step_i]
                     rnd_loss += model.compute_reward_rnd_uncertainty(hidden_state.detach(), action) * mask_batch[:, step_i]
+
+                if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
+                    ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
+                    ube_loss += config.ube_loss(ube_prediction, target_ube[:, step_i + 1]) * mask_batch[:, step_i]
 
                 policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(1) * mask_batch[:, step_i]
                 value_loss += config.scalar_value_loss(value, target_value_phi[:, step_i + 1]) * mask_batch[:, step_i]
@@ -248,6 +272,18 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                 consistency_loss += temp_loss
 
+            if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
+                # Compute value RND loss
+                rnd_loss += model.compute_value_rnd_uncertainty(hidden_state.detach()) * mask_batch[:, step_i]
+
+                # Compute reward RND loss
+                action = action_batch[:, step_i]
+                rnd_loss += model.compute_reward_rnd_uncertainty(hidden_state.detach(), action) * mask_batch[:, step_i]
+
+            if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
+                ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
+                ube_loss += config.ube_loss(ube_prediction, target_ube[:, step_i + 1]) * mask_batch[:, step_i]
+
             policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(1) * mask_batch[:, step_i]
             value_loss += config.scalar_value_loss(value, target_value_phi[:, step_i + 1]) * mask_batch[:, step_i]
             value_prefix_loss += config.scalar_reward_loss(value_prefix, target_value_prefix_phi[:, step_i]) * mask_batch[:, step_i]
@@ -287,11 +323,17 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     # weighted loss with masks (some invalid states which are out of trajectory.)
     loss = (config.consistency_coeff * consistency_loss + config.policy_loss_coeff * policy_loss +
             config.value_loss_coeff * value_loss + config.reward_loss_coeff * value_prefix_loss)
+    # Let's test for shapes of loss
+    if 'rnd' in config.uncertainty_architecture_type:
+        loss += rnd_loss
+    # Let's test for shapes of loss
+    if 'ube' in config.uncertainty_architecture_type:
+        loss += ube_loss * config.ube_loss_coeff
+    # Let's test for shapes of loss
+    weighted_loss = (weights * loss).mean()
 
-    if config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube':
-        weighted_loss = (weights * loss).mean() + rnd_loss.mean()
-    else:
-        weighted_loss = (weights * loss).mean()
+    if torch.isnan(weighted_loss).any():
+        print(f"$$$$$$$$$$$$$$$$$$$$$\n There are nans in weighted_loss. weighted_loss = {weighted_loss} \n $$$$$$$$$$$$$$$$$$$$$\n")
 
     # backward
     parameters = model.parameters()
@@ -539,7 +581,7 @@ def train(config, summary_writer, model_path=None):
 
 def debug_train_deep_sea(observations_batch, values_targets_batch, policy_targets_batch, rewards_targets_batch,
                          mask_batch, action_mapping_seed, stacked_observations, batch_size, rollout_length,
-                         step_count, action_batch):
+                         step_count, action_batch, ube_targets_batch):
     # Process the observations if necessary
     # observations_batch is of shape (batch_size, stacked_observations * unroll_size, h, w) [:, 0: config.stacked_observations * 3,:,:]
     # observations_batch = observations_batch
@@ -575,6 +617,6 @@ def debug_train_deep_sea(observations_batch, values_targets_batch, policy_target
     print(f"step_count = {step_count}, Num targets total = {batch_size * (rollout_length + 1)}, ouf of are diagonal = {len(diagonal_observation_indexes)}")
     for index, state in zip(diagonal_observation_indexes, diagonal_observations):
         [i, j] = index
-        print(f"Trajectory = {i}, State is: {state}, mask is: {mask_batch[i, j - 1] if j > 0 else 1},"
-              f" value target is: {values_targets_batch[i, j]}, reward target is {rewards_targets_batch[i, j]},"
-              f" and policy target is: {policy_targets_batch[i, j]}")# and action chose was: {action_batch[i, j] if }") # problematic because there's one less action
+        print(f"Trajectory = {i}, State: {state}, mask: {mask_batch[i, j - 1] if j > 0 else 1},"
+              f" value target: {values_targets_batch[i, j]}, reward target {rewards_targets_batch[i, j]},"
+              f" policy target: {policy_targets_batch[i, j]}, ube_target: {ube_targets_batch[i, j] if ube_targets_batch is not None else None}")# and action chose was: {action_batch[i, j] if }") # problematic because there's one less action

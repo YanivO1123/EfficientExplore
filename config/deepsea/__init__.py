@@ -15,12 +15,12 @@ class DeepSeaConfig(BaseConfig):
         super(DeepSeaConfig, self).__init__(
             training_steps=40 * 1000, #100000,
             last_steps=0,#20000
-            test_interval=500, #10000, 500
+            test_interval=200, #10000, 500
             log_interval=500,
-            vis_interval=1000,
+            vis_interval=100,   # 1000
             test_episodes=8, # 32,
-            checkpoint_interval=100,
-            target_model_interval=200,
+            checkpoint_interval=20,    # 100
+            target_model_interval=200,  # 200
             save_ckpt_interval=10000,
             max_moves=10,   # Max moves are re-set in set_game to env_size
             test_max_moves=10,  # test_max_moves are re-set in set_game to env_size
@@ -29,7 +29,7 @@ class DeepSeaConfig(BaseConfig):
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
-            batch_size=64,  # 32 # 64 #256,  # TODO: can be larger with smaller net
+            batch_size=32,  # 32 # 64 #256,  # TODO: can be larger with smaller net
             td_steps=5,     # 5, 10, 3, 1
             num_actors=1,
             # network initialization/ & normalization
@@ -44,10 +44,10 @@ class DeepSeaConfig(BaseConfig):
             lr_init=0.2,    # original 0.2
             lr_decay_rate=0.1,     # 0.1
             lr_decay_steps=40 * 1000,
-            num_unroll_steps=10, # 5    The hardcoded default is 5. Might not work reliably with other values
+            num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=5000,   # 500 400 32
+            start_transitions=500,   # 500 400 32
             total_transitions=40 * 1000,
             transition_num=1,
             do_consistency=False,
@@ -59,14 +59,15 @@ class DeepSeaConfig(BaseConfig):
             value_loss_coeff=0.5,  # 0.25 original # 1 0.5
             policy_loss_coeff=0.5,
             consistency_coeff=2,
+            ube_loss_coeff=2,
             # reward sum
             lstm_hidden_size=64, #512,  128  # TODO: Can lower aggressively
             lstm_horizon_len=5,
             # siamese
-            proj_hid=512, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            proj_out=512, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            pred_hid=256, # 32, #512,     # TODO: Can lower aggressively, and also check relevance with deepsea observations
-            pred_out=512, # 64, #1024,    # TODO: Can lower aggressively, and also check relevance with deepsea observations
+            proj_hid=512, # 64, 1024
+            proj_out=512, # 64, 1024
+            pred_hid=256, # 32, 512
+            pred_out=512, # 64, 1024,
             value_support=DiscreteSupport(-10, 10, delta=1),
             reward_support=DiscreteSupport(-10, 10, delta=1),
             # MuExplore
@@ -81,9 +82,10 @@ class DeepSeaConfig(BaseConfig):
             # Exploration
             mu_explore=False,
             beta=1.0,
-            disable_policy_in_exploration=False,
             # ratio of training / interactions
             training_ratio=1,
+            # UBE params
+            count_based_ube=False,
         )
         self.start_transitions = max(1, self.start_transitions)
 
@@ -108,6 +110,7 @@ class DeepSeaConfig(BaseConfig):
         self.fc_reward_layers = [128, 128] # [64, 64]
         self.fc_value_layers = [128, 128] # [64, 64]
         self.fc_policy_layers = [128, 128] # [64, 64]
+        self.fc_ube_layers = [128, 128]
         self.fc_rnd_layers = [1024, 1024, 1024, 256]
         self.fc_lstm_hidden_size = self.lstm_hidden_size
 
@@ -149,6 +152,7 @@ class DeepSeaConfig(BaseConfig):
                 self.fc_value_layers,
                 self.fc_policy_layers,
                 self.fc_rnd_layers,
+                self.fc_ube_layers,
                 self.value_support.size,
                 self.reward_support.size,
                 self.inverse_value_transform,
@@ -272,11 +276,11 @@ class DeepSeaConfig(BaseConfig):
         scalar_loss = torch.mean(scalar_loss_tensor, dim=0)
         return scalar_loss
 
-    # TODO:
     def ube_loss(self, prediction, target):
-        return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
-
-    def rnd_loss(self, prediction, target):
+        # return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
         return torch.nn.functional.mse_loss(prediction, target, reduction='none')
+
+    # def rnd_loss(self, prediction, target):
+    #     return torch.nn.functional.mse_loss(prediction, target, reduction='none')
 
 game_config = DeepSeaConfig()

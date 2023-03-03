@@ -7,7 +7,8 @@ import core.ctree.cytree as cytree
 
 from torch.cuda.amp import autocast as autocast
 from core.mcts import MCTS
-from core.model import concat_output, concat_output_value
+from core.model import concat_output, concat_output_value, concat_output_value_variance, concat_output_reward_variance, \
+    concat_uncertainty_output
 from core.utils import prepare_observation_lst, LinearSchedule
 
 import traceback
@@ -47,7 +48,96 @@ class BatchWorker_CPU(object):
     # TODO: Complete the UBE context preparation - if it's even necessary, because I might want to rely on
     #  reward-value-context
     def _prepare_ube_context(self, indices, games, state_index_lst, total_transitions):
-        return NotImplementedError
+        """
+        prepare the context of UBE targets for reanalyze.
+        The returned context consists of:
+            ube_obs_lst:
+                The stacked observations for UBE prediction for the representation of observations
+                obs_index-stacked_obs:obs_index
+            ube_mask:
+                UBE targets that are out of trajectory
+            state_index_lst:
+
+            rewards_uncertainty_obs_lst:
+                The observations obs_index-stacked_obs:obs_index for each reward-uncertainty, to compute the fresh
+                uncertainty in reward prediction for n-step UBE target.
+            actions:
+                The list of actions executed at these states, for reward-uncertainty prediction.
+        Parameters
+        ----------
+        indices: list
+            transition index in replay buffer
+        games: list
+            list of game histories
+        state_index_lst: list
+            transition index in game
+        total_transitions: int
+            number of collected transitions
+        """
+        zero_obs = games[0].zero_obs()
+        config = self.config
+        ube_obs_lst = []    # observations for predicting ube either from the net directly or from MCTS
+        ube_mask = []   # the ube_target is valid or not (out of trajectory)
+        rewards_uncertainty_obs_lst = []    # observations for predicting reward-uncertainty
+        rewards_uncertainty_mask = []   # whether the reward-uncertainty is in-trajectory or not
+        traj_lens = []
+        td_steps_lst = []
+        actions = []    # for reward-uncertainty prediction action is also necessary
+
+        for game, state_index, idx in zip(games, state_index_lst, indices):
+            traj_len = len(game)
+            traj_lens.append(traj_len)
+
+            # off-policy correction: shorter horizon of UBE td steps.
+            # Note that UBE uses ube_td_steps which may be different from the hyperparam. td_steps used for value
+            delta_td = (total_transitions - idx) // config.auto_td_steps
+            td_steps = config.ube_td_steps - delta_td
+            td_steps = np.clip(td_steps, 1, config.ube_td_steps).astype(np.int)
+
+            # prepare the corresponding observations for bootstrapped UBE targets of o_{t+k}, as well as for
+            # reward uncertainties o_{t:t+k-1}
+            # The resulting is one continuous list of observations from: state_index up to:
+            # state_index + config.num_unroll_steps + td_steps + stacked_observation
+            game_obs = game.obs(state_index, config.num_unroll_steps + td_steps)
+            for current_index in range(state_index, state_index + config.num_unroll_steps + 1):
+                td_steps_lst.append(td_steps)
+                bootstrap_index = current_index + td_steps
+
+                if bootstrap_index < traj_len:
+                    ube_mask.append(1)
+                    # The start index for the bootstrap is at position current_index - state_index + td_steps
+                    # Because unlike in value context game_obs starts from state_index not from state_index + td_steps
+                    beg_index = bootstrap_index - state_index
+                    end_index = beg_index + config.stacked_observations
+                    obs = game_obs[beg_index:end_index]
+                else:
+                    ube_mask.append(0)
+                    obs = zero_obs
+
+                # Prepare the observations for reward_uncertainty prediction for UBE target:
+                for i in range(td_steps):
+                    if current_index + i < traj_len:
+                        # The index of the observation in game_obs used to compute the i-th reward_uncertainty for
+                        # the n-step UBE target is: current_index - state_index + i
+                        beg_index = current_index - state_index + i
+                        end_index = beg_index + config.stacked_observations
+                        obs = game_obs[beg_index:end_index]
+                        rewards_uncertainty_obs_lst.append(obs)
+                        rewards_uncertainty_mask.append(1)
+                        actions.append(game.actions[beg_index])
+                    else:
+                        obs = zero_obs
+                        rewards_uncertainty_obs_lst.append(obs)
+                        rewards_uncertainty_mask.append(0)
+                        actions.append(0)
+
+                ube_obs_lst.append(obs)
+
+        ube_obs_lst = ray.put(ube_obs_lst)
+        rewards_uncertainty_obs_lst = ray.put(rewards_uncertainty_obs_lst)
+
+        ube_context = [ube_obs_lst, ube_mask, state_index_lst, rewards_uncertainty_obs_lst, rewards_uncertainty_mask, traj_lens, td_steps_lst, actions]
+        return ube_context
 
     def _prepare_reward_value_context(self, indices, games, state_index_lst, total_transitions):
         """
@@ -305,6 +395,11 @@ class BatchWorker_CPU(object):
             reward_value_context = self._prepare_reward_value_context(indices_lst, game_lst, game_pos_lst,
                                                                       total_transitions)
 
+        if 'ube' in self.config.uncertainty_architecture_type:
+            ube_context = self._prepare_ube_context(indices_lst, game_lst, game_pos_lst, total_transitions)
+        else:
+            ube_context = None
+
         # 0:re_num -> reanalyzed policy, re_num:end -> non reanalyzed policy
         # reanalyzed policy
         if re_num > 0:
@@ -320,11 +415,12 @@ class BatchWorker_CPU(object):
         else:
             policy_non_re_context = None
 
-        #TODO: Compute ube context with self._prepare_ube_context - if even necessary
+        if 'ube' in self.config.uncertainty_architecture_type:
+            context = reward_value_context, policy_re_context, policy_non_re_context, ube_context, inputs_batch, weights
+        else:
+            context = reward_value_context, policy_re_context, policy_non_re_context, inputs_batch, weights
 
-        #TODO: Change context structure to pass UBE context
-        countext = reward_value_context, policy_re_context, policy_non_re_context, inputs_batch, weights
-        self.mcts_storage.push(countext)
+        self.mcts_storage.push(context)
 
     def run(self):
         # start making mcts contexts to feed the GPU batch maker
@@ -404,15 +500,190 @@ class BatchWorker_GPU(object):
                                                        mapping_seed=self.config.seed,
                                                        fake=self.config.plan_with_fake_visit_counter)
 
-    #TODO: Complete the target generation for UBE
     def _prepare_ube(self, ube_context):
         """
-            Takes a UBE context, and returns batch of UBE targets
+            Takes a UBE context, and returns batch of UBE targets.
+            The UBE targets are computed as the n-step targets summing:
+            sum_[i->n-1] discount ** (2*i) * reward_uncertainty_i
+                + discount ** (2*n) * ube_bootstrap
+            ube_bootstrap is either directly from the UBE nn, or from the MCTS tree, just like value bootstrap.
+            As a source of reward-uncertainty, three different quantities could be use: ensemble, rnd and visitation
+                counting. ensemble & rnd require predicting with the network.
+                In this implementation, visitation counts do not: the reward-uncertainty comes directly from the
+                visitation count, and the bootstrapped target is the propagated max-value-uncertainty.
         """
-        return NotImplementedError
+        ube_obs_lst, ube_mask, state_index_lst, rewards_uncertainty_obs_lst, rewards_uncertainty_mask, traj_lens, td_steps_lst, actions = ube_context
+        ube_obs_lst = ray.get(ube_obs_lst)
+        rewards_uncertainty_obs_lst = ray.get(rewards_uncertainty_obs_lst)
+        device = self.config.device
+        batch_size = len(ube_obs_lst)   # that's the "true" batch_size = config.batch_size * (unroll_steps + 1)
+        # td_steps_lst must be an array and not a list for td_steps_lst * 2 to work in discount computation
+        td_steps_lst = np.asarray(td_steps_lst)
+        # Expected shape: config.batch_size * (unroll_steps + 1) * td_steps
+        batch_size_reward_uncertainties = len(rewards_uncertainty_obs_lst)
+
+        batch_ubes = []
+
+        with torch.no_grad():
+            # Prepare the bootstrapped UBE and reward_uncertainties
+            ube_obs_lst = prepare_observation_lst(ube_obs_lst)
+            rewards_uncertainty_obs_lst = prepare_observation_lst(rewards_uncertainty_obs_lst)
+
+            if self.config.count_based_ube and self.config.use_visitation_counter:
+                # If counter IS used, we take the local uncertainties instead.
+                # First, we reshape observations to not include stacked-observations
+                rewards_uncertainty_lst = self.visitation_counter.get_reward_uncertainty(rewards_uncertainty_obs_lst,
+                                                                                         actions)
+                # Uncomment to use as target the propagated count value as target instead of actual ube bootstrap
+                # ube_lst = self.visitation_counter.get_propagated_value_uncertainty(ube_obs_lst,
+                #                                                                    propagation_horizon=self.config.env_size,
+                #                                                                    sampling_times=0,
+                #                                                                    use_state_visits=self.config.plan_with_state_visits)
+                # split a full batch into slices of mini_infer_size: to save the GPU memory for more GPU actors
+                m_batch = self.config.mini_infer_size
+                slices = np.ceil(batch_size / m_batch).astype(np.int_)
+                network_output_ube = []
+                # First for UBE-bootstrap
+                for i in range(slices):
+                    beg_index = m_batch * i
+                    end_index = m_batch * (i + 1)
+                    if self.config.image_based:
+                        m_obs = torch.from_numpy(ube_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                    else:
+                        m_obs = torch.from_numpy(ube_obs_lst[beg_index:end_index]).to(device).float()
+                    if self.config.amp_type == 'torch_amp':
+                        with autocast():
+                            m_output = self.model.initial_inference(m_obs)
+                    else:
+                        m_output = self.model.initial_inference(m_obs)
+                    network_output_ube.append(m_output)
+
+                ube_lst = concat_output_value_variance(network_output_ube)
+                ube_lst = ube_lst.reshape(-1) * (  # UBE targets are discounted ** 2
+                        np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
+                ube_lst = ube_lst * np.array(ube_mask)
+                ube_lst = ube_lst.tolist()
+            else:
+                # split a full batch into slices of mini_infer_size: to save the GPU memory for more GPU actors
+                m_batch = self.config.mini_infer_size
+                slices = np.ceil(batch_size / m_batch).astype(np.int_)
+                network_output_ube = []
+                # First for UBE-bootstrap
+                for i in range(slices):
+                    beg_index = m_batch * i
+                    end_index = m_batch * (i + 1)
+                    if self.config.image_based:
+                        m_obs = torch.from_numpy(ube_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+                    else:
+                        m_obs = torch.from_numpy(ube_obs_lst[beg_index:end_index]).to(device).float()
+                    if self.config.amp_type == 'torch_amp':
+                        with autocast():
+                            m_output = self.model.initial_inference(m_obs)
+                    else:
+                        m_output = self.model.initial_inference(m_obs)
+                    network_output_ube.append(m_output)
+
+                # And then for reward-uncertainties
+                slices = np.ceil(batch_size_reward_uncertainties / m_batch).astype(np.int_)
+                network_output_reward_uncertainties = []
+                actions = torch.from_numpy(np.asarray(actions)).to(device).unsqueeze(1).long()
+                for i in range(slices):
+                    beg_index = m_batch * i
+                    end_index = m_batch * (i + 1)
+                    if self.config.image_based:
+                        rewards_uncertainty_obs = torch.from_numpy(rewards_uncertainty_obs_lst[beg_index:end_index]).to(
+                            device).float() / 255.0
+                    else:
+                        rewards_uncertainty_obs = torch.from_numpy(rewards_uncertainty_obs_lst[beg_index:end_index]).to(
+                            device).float()
+                    if self.config.amp_type == 'torch_amp':
+                        with autocast():
+                            # Compute initial_inference for the hidden state and reward
+                            _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(rewards_uncertainty_obs)
+                            state = torch.from_numpy(np.asarray(state)).to(device).float()
+                            hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
+                                device)
+                            hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
+                                device)
+                            # Compute recurrent_inference for reward_rnd (or ensemble reward variance) prediction
+                            r_output = self.model.recurrent_inference(state,
+                                                                      (hidden_states_c_reward, hidden_states_h_reward),
+                                                                      actions[beg_index:end_index])
+                    else:
+                        _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(rewards_uncertainty_obs)
+                        state = torch.from_numpy(np.asarray(state)).to(device).float()
+                        hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
+                            device)
+                        hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
+                            device)
+                        r_output = self.model.recurrent_inference(state,
+                                                                  (hidden_states_c_reward, hidden_states_h_reward),
+                                                                  actions[beg_index:end_index])
+                    network_output_reward_uncertainties.append(r_output)
+
+                # Rewards uncertainty_lst is expected to be of shape:
+                # [config.batch_size * (config.num_unroll_steps + 1) * config.ube_td_steps]
+                rewards_uncertainty_lst = concat_output_reward_variance(network_output_reward_uncertainties)
+
+                if self.config.use_root_value:
+                    # use the root values from MCTS. We propagate uncertainty instead of value and reward using a
+                    # discount ** 2
+                    value_variance_pool, value_prefix_variance_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_uncertainty_output(
+                        network_output_ube)
+                    value_prefix_variance_pool = value_prefix_variance_pool.squeeze().tolist()
+                    policy_logits_pool = policy_logits_pool.tolist()
+                    # To reduce cost, compute ube_targets w. MCTS trees w. budget num_simulations_ube < num_simulations
+                    roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations_ube)
+                    noises = [
+                        np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
+                            np.float32).tolist() for _ in range(batch_size)]
+                    # TODO: Do I really want to create NOISY roots as targets?
+                    roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_variance_pool, policy_logits_pool)
+                    MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots, propagating_uncertainty=True)
+                    roots_values = roots.get_values()
+                    ube_lst = np.array(roots_values)
+                else:
+                    # use the nn-predicted ube_uncertainties
+                    ube_lst = concat_output_value_variance(network_output_ube)
+
+                # get last state ube
+                ube_lst = ube_lst.reshape(-1) * (   # UBE targets are discounted ** 2
+                            np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
+                ube_lst = ube_lst * np.array(ube_mask)
+                ube_lst = ube_lst.tolist()
+
+            # Compute the UBE target based on the discount ** 2ed sum of reward uncertainties and
+            # (discount ** 2n) * ube_bootstrap
+            ube_index = 0
+            rewards_index = 0
+            # For each target in batch
+            for batch_index, (traj_len_non_re, state_index) in enumerate(zip(traj_lens, state_index_lst)):
+                target_ubes = []
+                # For each step in unroll + 1 (first step is initial_inf, and then unroll * recurrent_inf)
+                for current_index in range(state_index, state_index + self.config.num_unroll_steps + 1):
+                    # bootstrap_index = current_index * batch_index + td_steps_lst[ube_index]
+                    bootstrap_index = rewards_index + td_steps_lst[ube_index]
+                    # For each reward_uncertainty in the n-step ube target, n = ube_td_steps
+                    for i, reward_uncertainty in enumerate(rewards_uncertainty_lst[
+                                                           rewards_index:bootstrap_index]):
+                        # rewards_uncertainty_mask is indexed flat, and of length batch * unroll * td
+                        ube_lst[ube_index] += reward_uncertainty * self.config.discount ** (i * 2) * \
+                                              rewards_uncertainty_mask[rewards_index]
+                        rewards_index += 1
+                    if current_index < traj_len_non_re:
+                        target_ubes.append(ube_lst[ube_index])
+                    else:
+                        target_ubes.append(0)
+                    ube_index += 1
+
+                batch_ubes.append(target_ubes)
+
+        batch_ubes = np.asarray(batch_ubes)
+        return batch_ubes
 
     def _prepare_reward_value(self, reward_value_context):
-        """prepare reward and value targets from the context of rewards and values
+        """
+            prepare reward and value targets from the context of rewards and values
         """
         value_obs_lst, value_mask, state_index_lst, rewards_lst, traj_lens, td_steps_lst = reward_value_context
         value_obs_lst = ray.get(value_obs_lst)
@@ -517,6 +788,8 @@ class BatchWorker_GPU(object):
         batch_size = len(value_obs_lst)
 
         batch_values, batch_value_prefixs, batch_value_target_types = [], [], []
+        # batch_uncertainties = []
+
         with torch.no_grad():
             value_obs_lst = prepare_observation_lst(value_obs_lst)
             zero_step_value_obs_lst = prepare_observation_lst(zero_step_value_obs_lst)
@@ -591,6 +864,11 @@ class BatchWorker_GPU(object):
             value_lst_zero_step = value_lst_zero_step * np.array(zero_step_value_mask)
             value_lst_zero_step = value_lst_zero_step.tolist()
 
+            # Uncertainty-weighting for targets:
+            # value_uncertainty_lst, value_uncertainty_lst_zero_step need to be initialized out of the computation of the values
+            # The uncertainty of n-step value targets is discounted with gamma ** (2 * n)
+            # value_uncertainty_lst = value_uncertainty_lst.reshape(-1) * (np.array([self.config.discount for _ in range(batch_size)]) ** (2 * td_steps_lst))
+
             value_index = 0
             for traj_len_non_re, reward_lst, state_index, exploration_episode in zip(traj_lens, rewards_lst, state_index_lst, exploration_episodes):
                 # traj_len = len(game)
@@ -598,6 +876,7 @@ class BatchWorker_GPU(object):
                 target_value_prefixs = []
                 # Logs whether this target is n-step EXPLORATORY target (1) or any other target - 0-step exploratory or n-step regular (0)
                 targets_values_types = []
+                # target_value_uncertainties = []
 
                 horizon_id = 0
                 value_prefix = 0.0
@@ -622,8 +901,10 @@ class BatchWorker_GPU(object):
                         if value_lst[value_index] < value_lst_zero_step[value_index] and exploration_episode and \
                                 self.config.use_max_value_targets:
                             target_values.append(value_lst_zero_step[value_index])
+                            # target_value_uncertainties.append(value_uncertainty_lst_zero_step[value_index])
                         else:
                             target_values.append(value_lst[value_index])
+                            # target_value_uncertainties.append(value_uncertainty_lst[value_index])
                         # If this was an n-step EXPLORATORY target, append 1
                         if value_lst[value_index] > value_lst_zero_step[value_index] and exploration_episode:
                             targets_values_types.append(1)  # this was an n-step EXPLORATORY target
@@ -637,15 +918,22 @@ class BatchWorker_GPU(object):
                         target_values.append(0)
                         target_value_prefixs.append(value_prefix)
                         targets_values_types.append(0)
+                        # target_value_uncertainties.append(0)  # append uncertainty 0
                     value_index += 1
 
                 batch_value_prefixs.append(target_value_prefixs)
                 batch_values.append(target_values)
                 batch_value_target_types.append(targets_values_types)
+                # batch_uncertainties.append(target_value_uncertainties)
 
         batch_value_prefixs = np.asarray(batch_value_prefixs)
         batch_values = np.asarray(batch_values)
         batch_value_target_types = np.asarray(batch_value_target_types)
+        # batch_uncertainties = np.asarray(batch_uncertainties)
+
+        # if self.config.loss_uncertainty_weighting:
+        #     return batch_value_prefixs, batch_values, batch_value_target_types, batch_uncertainties
+        # else:
         return batch_value_prefixs, batch_values, batch_value_target_types
 
     def _prepare_policy_re_max_targets(self, policy_re_context, max_targets):
@@ -823,13 +1111,26 @@ class BatchWorker_GPU(object):
         if input_countext is None:
             time.sleep(1)
         else:
-            reward_value_context, policy_re_context, policy_non_re_context, inputs_batch, target_weights = input_countext
+            # Update the state counter
+            if self.config.plan_with_visitation_counter and 'ube' in self.config.uncertainty_architecture_type:
+                s_counts, sa_counts = ray.get(self.storage.get_counts.remote())
+                self.visitation_counter.s_counts = s_counts
+                self.visitation_counter.sa_counts = sa_counts
+            if 'ube' in self.config.uncertainty_architecture_type:
+                reward_value_context, policy_re_context, policy_non_re_context, ube_context, inputs_batch, target_weights = input_countext
+            else:
+                reward_value_context, policy_re_context, policy_non_re_context, inputs_batch, target_weights = input_countext
+
             if target_weights is not None:
                 self.model.load_state_dict(target_weights)
                 self.model.to(self.config.device)
                 self.model.eval()
 
             # target reward, value
+            # if self.config.loss_uncertainty_weighting:
+            #     batch_value_prefixs, batch_values, max_targets, batch_uncertainties = self._prepare_reward_value_max_targets(
+            #         reward_value_context)
+            # elif instead of if
             if self.config.use_max_value_targets or self.config.use_max_policy_targets:
                 batch_value_prefixs, batch_values, max_targets = self._prepare_reward_value_max_targets(reward_value_context)
             else:
@@ -848,15 +1149,19 @@ class BatchWorker_GPU(object):
             batch_policies_non_re = self._prepare_policy_non_re(policy_non_re_context)
             batch_policies = np.concatenate([batch_policies_re, batch_policies_non_re])
 
-            targets_batch = [batch_value_prefixs, batch_values, batch_policies]
+            # target UBE
+            if 'ube' in self.config.uncertainty_architecture_type:
+                batch_ubes = self._prepare_ube(ube_context)
 
-            # Go over this batch. look for targets that are diagonal, exploratory, and 0.0
-            step_count = ray.get(self.storage.get_counter.remote())
-            if self.config.use_max_value_targets and 'deep_sea/0' in self.config.env_name and step_count % self.config.test_interval == 0:
-                try:
-                    self.debug_deep_sea(batch_values, batch_policies, reward_value_context, max_targets, step_count)
-                except:
-                    traceback.print_exc()
+            # if self.config.loss_uncertainty_weighting:
+            #    targets_batch = [batch_value_prefixs, batch_values, batch_policies, batch_uncertainties]
+            # else:
+            #    targets_batch = [batch_value_prefixs, batch_values, batch_policies]
+
+            if 'ube' in self.config.uncertainty_architecture_type:
+                targets_batch = [batch_value_prefixs, batch_values, batch_policies, batch_ubes]
+            else:
+                targets_batch = [batch_value_prefixs, batch_values, batch_policies]
 
             # a batch contains the inputs and the targets; inputs is prepared in CPU workers
             self.batch_storage.push([inputs_batch, targets_batch])

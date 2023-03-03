@@ -241,12 +241,14 @@ def make_atari(env_id, skip=4, max_episode_steps=None):
         env = TimeLimit(env, max_episode_steps=max_episode_steps)
     return env
 
+
 def make_deepsea(env_id, seed, randomize_actions):
     # env = bsuite.load_from_id(env_id)
     size = sweep.SETTINGS[env_id]['size']
     env = DeepSea(size=size, mapping_seed=seed, seed=seed, randomize_actions=randomize_actions)
     env = bsuite_gym_wrapper.GymFromDMEnv(env)
     return env
+
 
 def set_seed(seed):
     # set seed
@@ -255,6 +257,17 @@ def set_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
+
+
+def uncertainty_to_loss_weight(value_uncertainties_list, lower_bound=0.2):
+    """
+        Takes a list of value uncertainties, and computes a weight between lower_bound < 1 and 1 for each uncertainty.
+        uncertainty -> 0, weight -> 1. uncertainty -> inf, weight -> lower_bound
+        Is computed as 1 / uncertainty, clipped between
+    """
+    value_uncertainties_list = np.asarray(value_uncertainties_list)
+    value_loss_coefficients = np.clip(1 / (value_uncertainties_list + 0.001), a_min=lower_bound, a_max=1)
+    return value_loss_coefficients
 
 
 def make_results_dir(exp_path, args):
