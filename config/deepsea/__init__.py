@@ -47,7 +47,7 @@ class DeepSeaConfig(BaseConfig):
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=1000,   # 500 400 32 5000
+            start_transitions=1000,   # 500 400 32 5000 1000
             total_transitions=40 * 1000,
             transition_num=1,
             do_consistency=False,
@@ -72,7 +72,6 @@ class DeepSeaConfig(BaseConfig):
             reward_support=DiscreteSupport(-10, 10, delta=1),
             # MuExplore
             # Architecture
-            use_uncertainty_architecture=False,
             ensemble_size=3,
             use_network_prior=True,
             prior_scale=10.0,
@@ -110,7 +109,7 @@ class DeepSeaConfig(BaseConfig):
         self.fc_reward_layers = [128, 128] # [64, 64]
         self.fc_value_layers = [128, 128] # [64, 64]
         self.fc_policy_layers = [128, 128] # [64, 64]
-        self.fc_ube_layers = [128, 128]
+        self.fc_ube_layers = [128, 128, 128]
         self.fc_rnd_layers = [1024, 1024, 1024, 256]
         self.fc_lstm_hidden_size = self.lstm_hidden_size
 

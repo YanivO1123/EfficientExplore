@@ -625,7 +625,8 @@ class BatchWorker_GPU(object):
                 # [config.batch_size * (config.num_unroll_steps + 1) * config.ube_td_steps]
                 rewards_uncertainty_lst = concat_output_reward_variance(network_output_reward_uncertainties)
 
-                if self.config.use_root_value:
+                # For correct comparison, root_value cannot be used as bootstrap target when MuExplore is not used
+                if self.config.use_root_value and self.config.mu_explore:
                     # use the root values from MCTS. We propagate uncertainty instead of value and reward using a
                     # discount ** 2
                     value_variance_pool, value_prefix_variance_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_uncertainty_output(

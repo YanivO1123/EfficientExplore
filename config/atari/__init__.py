@@ -65,7 +65,6 @@ class AtariConfig(BaseConfig):
             pred_out=256, #1024,
             # MuExplore
             # Architecture
-            use_uncertainty_architecture=True,
             ensemble_size=2,
             use_network_prior=True,
             prior_scale=10.0,

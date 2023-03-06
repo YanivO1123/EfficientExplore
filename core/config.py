@@ -75,8 +75,6 @@ class BaseConfig(object):
                  value_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
                  reward_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
                  mu_explore: bool = False,
-                 use_uncertainty_architecture: bool = False,
-                 uncertainty_architecture_type: str = 'ensemble',
                  use_visitation_counter: bool = False,
                  plan_with_visitation_counter: bool = False,
                  ensemble_size: int = 5,
@@ -217,12 +215,6 @@ class BaseConfig(object):
         mu_explore: bool
             whether to use mu_explore in MCTS (i.e. out of p_mcts_num envs, one is exploitatory (standard), and the rest
             are exploratory (with MuExplore)
-        use_uncertainty_architecture: bool
-            a bool whether to init a regular EffZero network, or a network with ensembles over value prefix and
-            value predictions
-        uncertainty_architecture_type: str
-            Options: 'ensemble', 'rnd', 'rnd_ube', 'ensemble_ube' defaults to ensemble
-            Decides the uncertainty type that will be used by the agent
         use_visitation_counter: bool
             Only implemented for deep_sea. The visitation counter counts state-action visitations and uses them as a
             measure of epistemic uncertainty, as so: 1 / (epsilon + state_action_visit_count)
@@ -365,8 +357,8 @@ class BaseConfig(object):
         ## uncertainty
         # architecture
         self.architecture_type = 'resnet'   # Decides the architecture of the NN. 'fully_connected' is only implemented for deepsea
-        self.use_uncertainty_architecture = use_uncertainty_architecture
-        self.uncertainty_architecture_type = uncertainty_architecture_type
+        self.use_uncertainty_architecture = False
+        self.uncertainty_architecture_type = None   # default is set in main, in parameter parsing
 
         # ensemble
         self.ensemble_size = ensemble_size
@@ -374,12 +366,14 @@ class BaseConfig(object):
         self.prior_scale = prior_scale
 
         # rnd
-        self.rnd_scale = 1 # 2
+        self.rnd_scale = 1  # 2
 
         # exploration
+        self.use_deep_exploration = False       # Activated in set_config if mu_explore or ube
         self.mu_explore = mu_explore
         self.beta = beta
         self.disable_policy_in_exploration = disable_policy_in_exploration
+        self.number_of_exploratory_envs = 0     # Setup in set_config if self.use_deep_exploration
 
         # visitation counter
         self.use_visitation_counter = use_visitation_counter
@@ -396,6 +390,9 @@ class BaseConfig(object):
 
         # Uncertainty weighting of losses
         # self.loss_uncertainty_weighting = loss_uncertainty_weighting
+
+        # Action selection:
+        self.standard_action_selection = True   # Set to false in set_config if not MuExplore and yes ube
 
         # UBE hyper parameters
         self.ube_td_steps = ube_td_steps
@@ -521,27 +518,17 @@ class BaseConfig(object):
         self.p_mcts_num = args.p_mcts_num
         self.use_root_value = args.use_root_value
 
-        # Setup config. for the cluster
+        # Setup cluster specific config
         if args.cluster:
-            # Batch size
             self.batch_size = 256
-            # MuExplore
-            # Ensemble network arch.
             self.ensemble_size = 5
-
+            self.start_transitions = max(self.start_transitions, self.batch_size)
             if args.case == 'deep_sea':
                 self.ensemble_size = 10
-                self.start_transitions = max(self.start_transitions, self.batch_size)
-                # In deep sea w. MuExplore we want to update weights often in selfplay, to make the most of exploration
-                # As a result, we compute checkpoint_interval as once every full batched episode
-                self.checkpoint_interval = min(self.checkpoint_interval, self.p_mcts_num * self.env_size)
-                # We compute target_model_interval as once every 4 batched episodes.
-                self.target_model_interval = min(self.target_model_interval, 4 * self.p_mcts_num * self.env_size)
                 # self.proj_hid = 1024
                 # self.proj_out = 1024
                 # self.pred_hid = 512
                 # self.pred_out = 1024
-
             if args.case == 'atari':
                 # Base network arch.
                 self.lstm_hidden_size = 512
@@ -550,51 +537,60 @@ class BaseConfig(object):
                 self.pred_hid = 512
                 self.pred_out = 1024
 
-        # Setup MuExplore params from command line
-        if args.beta is not None and args.beta >= 0:
-            self.beta = args.beta * 1.0
-        elif args.beta is not None and args.beta < 0:
-            print(f"In parameter setup, received illegal beta value < 0. Setting the currently configured default beta "
-                  f"instead: beta = {self.beta}")
+        # Setup deep_sea specific config
         if args.case == 'deep_sea':
+            # In deep sea w. MuExplore we want to update weights often in selfplay, to make the most of exploration
+            # As a result, we compute checkpoint_interval as once every batched episode
+            training_steps_per_episode_ratio = self.training_ratio * self.p_mcts_num * self.env_size
+            self.checkpoint_interval = min(self.checkpoint_interval, training_steps_per_episode_ratio)
+            # We compute target_model_interval as once every M batched episodes.
+            M = 4
+            self.target_model_interval = min(self.target_model_interval, M * training_steps_per_episode_ratio)
+            # Reset ube every N batched episodes
+            N = 20
+            self.reset_ube_interval = min(self.reset_ube_interval, N * training_steps_per_episode_ratio)
             self.use_visitation_counter = args.visit_counter
             # only use visit_counter in planning when it's enabled
             self.plan_with_visitation_counter = args.p_w_vis_counter and self.use_visitation_counter
+            self.sampling_times = args.sampling_times
             if self.plan_with_visitation_counter:
                 self.plan_with_fake_visit_counter = args.plan_w_fake_visit_counter
                 self.plan_with_state_visits = args.plan_w_state_visits
-        self.use_uncertainty_architecture = args.uncertainty_architecture
+            self.architecture_type = args.architecture_type     # Only in deep_sea multiple arch.s are implemented
+            self.learned_model = not args.alpha_zero_planning   # AlphaZero is only implemented in deep_sea
+            self.deepsea_randomize_actions = not args.det_deepsea_actions
+
+        # MuExplore:
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
-        if args.case == 'deep_sea':
-            self.architecture_type = args.architecture_type
-            self.learned_model = not args.alpha_zero_planning
-        else:
-            self.architecture_type = 'resnet'
-        # MuExplore is only applicable with some uncertainty mechanism
-        assert (args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter)) or (not args.mu_explore)
-        self.sampling_times = args.sampling_times
+        self.use_uncertainty_architecture = args.uncertainty_architecture  # Is there an active unc. arch. (rnd / ens.)
+        assert (args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter)) or (
+            not args.mu_explore)  # MuExplore is only applicable with some uncertainty mechanism
         self.mu_explore = args.mu_explore and (self.use_uncertainty_architecture or self.use_visitation_counter)
+        self.use_deep_exploration = self.mu_explore or 'ube' in self.uncertainty_architecture_type
+        if args.beta is not None and args.beta >= 0:
+            self.beta = args.beta * 1.0
+        elif args.beta is not None and args.beta < 0:
+            print(
+                f"In parameter setup, received illegal beta value < 0. Setting the currently configured default beta "
+                f"instead: beta = {self.beta}")
+        self.standard_action_selection = not args.q_based_action_selection or not self.use_deep_exploration
         self.disable_policy_in_exploration = args.disable_policy_in_exploration
         self.root_exploration_fraction = args.exploration_fraction
-        # MuExplore: number_of_exploratory_envs defaults to all envs - 1
-        self.number_of_exploratory_envs = self.p_mcts_num - 1 if self.mu_explore else 0
-        self.deepsea_randomize_actions = not args.det_deepsea_actions
-        if args.number_of_exploratory_envs is not None:
+        # Max value and policy targets can be used independently, but only with deep exploration
+        self.use_max_value_targets = args.use_max_value_targets and self.use_deep_exploration
+        self.use_max_policy_targets = args.use_max_policy_targets and self.use_deep_exploration
+
+        if args.number_of_exploratory_envs is not None and self.use_deep_exploration:
             assert args.number_of_exploratory_envs <= self.p_mcts_num
             self.number_of_exploratory_envs = args.number_of_exploratory_envs
-
-        # Max value and policy targets can be used independently, but only with mu_explore
-        self.use_max_value_targets = args.use_max_value_targets and self.mu_explore
-        self.use_max_policy_targets = args.use_max_policy_targets and self.mu_explore
+        else:
+            # Number_of_exploratory_envs defaults to all envs - 1, if deep_exploration is used
+            self.number_of_exploratory_envs = self.p_mcts_num - 1 if self.use_deep_exploration else 0
 
         # UBE parameters:
         if 'ube' in self.uncertainty_architecture_type:
             self.periodic_ube_weight_reset = args.periodic_ube_weight_reset
             self.count_based_ube = self.plan_with_visitation_counter
-            if args.case == 'deep_sea':
-                # Reset ube every N batched episodes
-                N = 20
-                self.reset_ube_interval = min(self.reset_ube_interval, N * self.p_mcts_num * self.env_size)
 
         # loss_uncertainty_weighting can only be used with a source of uncertainty
         # self.loss_uncertainty_weighting = args.loss_uncertainty_weighting and \

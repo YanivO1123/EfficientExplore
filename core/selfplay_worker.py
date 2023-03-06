@@ -12,7 +12,7 @@ from torch.nn import L1Loss
 from torch.cuda.amp import autocast as autocast
 from core.mcts import MCTS
 from core.game import GameHistory
-from core.utils import select_action, prepare_observation_lst
+from core.utils import select_action, prepare_observation_lst, select_q_based_action
 
 from core.visitation_counter import CountUncertainty
 
@@ -118,7 +118,7 @@ class DataWorker(object):
         print(f"Model started", flush=True)
         start_training = False
         envs = [self.config.new_game(self.config.seed + (self.rank + 1) * i) for i in range(env_nums)]
-        if self.config.mu_explore:
+        if self.config.use_deep_exploration:
             exploit_env_nums = env_nums - self.config.number_of_exploratory_envs
         else:
             exploit_env_nums = env_nums
@@ -142,14 +142,22 @@ class DataWorker(object):
 
         # MuExplore: keep track of values and value uncertainties to debug beta
         value_max, value_unc_max, value_min, value_unc_min, value_sum, value_unc_sum = -math.inf, -math.inf, math.inf, math.inf, 0, 0
+        # To alternate random action selection or det. action selection in deep_sea
+        deterministic_deep_sea = False
+        # We change action selection in deepsea from random to det. every N = 1 batched episodes
+        flip_deep_sea_action_selection = 1 * self.config.env_size * self.config.p_mcts_num
+        # For q_value_based action selection
+        pb_c_init = self.config.pb_c_init
 
         with torch.no_grad():
             while True:
-                # Update the state counter in the shared storage
+                # Update the state counter in the shared storage every episode
                 if self.config.use_visitation_counter:
                     current_s_counts = copy.deepcopy(self.visitation_counter.s_counts)
                     current_sa_counts = copy.deepcopy(self.visitation_counter.sa_counts)
                     self.storage.set_counts.remote(current_s_counts, current_sa_counts)
+                    np.save(self.config.exp_path + "/s_counts", np.asarray(current_s_counts))
+                    np.save(self.config.exp_path + "/sa_counts", np.asarray(current_sa_counts))
 
                 trained_steps = ray.get(self.storage.get_counter.remote())
                 # training finished
@@ -161,7 +169,7 @@ class DataWorker(object):
                 dones = np.array([False for _ in range(env_nums)])
                 game_histories = [GameHistory(envs[i].env.action_space, max_length=self.config.history_length,
                                               config=self.config,
-                                              exploration_episode=(i >= exploit_env_nums and self.config.mu_explore))
+                                              exploration_episode=(i >= exploit_env_nums and self.config.use_deep_exploration))
                                   for i in range(env_nums)]
                 last_game_histories = [None for _ in range(env_nums)]
                 last_game_priorities = [None for _ in range(env_nums)]
@@ -192,11 +200,6 @@ class DataWorker(object):
                 self_play_visit_entropy = []
                 other_dist = {}
 
-                # To alternate random action selection or det. action selection in deep_sea
-                deterministic_deep_sea = False
-                # We change from random to det. every N * num_envs transitions
-                flip_deep_sea_action_selection = self.config.env_size * self.config.p_mcts_num
-
                 # play games until max moves
                 while not dones.all() and (step_counter <= self.config.max_moves):
                     if not start_training:
@@ -209,9 +212,12 @@ class DataWorker(object):
                         # training is finished
                         time.sleep(30)
                         return
-                    if start_training and self.config.training_ratio * (total_transitions / max_transitions) > (trained_steps / self.config.training_steps):
+                    if start_training and self.config.training_ratio * (total_transitions / max_transitions) > \
+                            (trained_steps / self.config.training_steps):
                         # self-play is faster than training speed or finished
-                        # MuExplore: added self.config.training_ratio, which requires ratio training / interactions to be AT LEAST self.config.training_ratio
+                        # MuExplore:
+                        # added training_ratio in config, which requires ratio training / interactions to be AT LEAST
+                        # training_ratio
                         time.sleep(1)
                         continue
 
@@ -276,7 +282,7 @@ class DataWorker(object):
                             init_obs = envs[i].reset()
                             game_histories[i] = GameHistory(env.env.action_space, max_length=self.config.history_length,
                                                             config=self.config,
-                                                            exploration_episode=(i >= exploit_env_nums and self.config.mu_explore))
+                                                            exploration_episode=(i >= exploit_env_nums and self.config.use_deep_exploration))
                             last_game_histories[i] = None
                             last_game_priorities[i] = None
                             stack_obs_windows[i] = [init_obs for _ in range(self.config.stacked_observations)]
@@ -329,32 +335,45 @@ class DataWorker(object):
                         np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
                             np.float32).tolist() for _ in range(env_nums)]
 
-                    #MuExplore: Init Exploratory CRoots and prepare them exploratorily
+                    # MuExplore:
                     if self.config.mu_explore:
-                        # MuExplore: Disable policy in prior
+                        # Disable policy prior in exploration
                         if self.config.disable_policy_in_exploration:
-                            policy_logits_pool = policy_logits_pool[:exploit_env_nums] + [np.ones_like(policy_logits_pool[0]).tolist()
-                                                                            for _ in range(len(policy_logits_pool) - exploit_env_nums)]
-                        roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations, self.config.beta, self.config.number_of_exploratory_envs)
+                            policy_logits_pool = policy_logits_pool[:exploit_env_nums] + \
+                                                 [np.ones_like(policy_logits_pool[0]).tolist()
+                                                  for _ in range(len(policy_logits_pool) - exploit_env_nums)]
+                        # Init Exploratory CRoots and prepare them exploratorily
+                        roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations,
+                                             self.config.beta, self.config.number_of_exploratory_envs)
                         roots.prepare_explore(self.config.root_exploration_fraction, noises, value_prefix_pool,
-                                              policy_logits_pool, value_prefix_variance_pool, self.config.beta, self.config.number_of_exploratory_envs)
+                                              policy_logits_pool, value_prefix_variance_pool, self.config.beta,
+                                              self.config.number_of_exploratory_envs)
                     else:
                         roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations)
                         roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool,
                                       policy_logits_pool)
 
-                    # MuExplore: if we wish to use a visitation counter:
+                    # do MCTS for a policy
                     if self.config.plan_with_visitation_counter and self.visitation_counter is not None:
-                        MCTS(self.config).search_w_visitation_counter(roots, model, hidden_state_roots, reward_hidden_roots,
-                                                 self.visitation_counter, initial_observations_for_counter,
+                        # If we plan with a visitation counter for MuExplore (only implemented for deep_sea)
+                        MCTS(self.config).search_w_visitation_counter(roots, model, hidden_state_roots,
+                                                                      reward_hidden_roots,
+                                                                      self.visitation_counter,
+                                                                      initial_observations_for_counter,
                                                                       use_state_visits=self.config.plan_with_state_visits,
                                                                       sampling_times=self.config.sampling_times)
                     else:   # Otherwise
-                        # do MCTS for a policy
                         MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=True)
 
                     roots_distributions = roots.get_distributions()
                     roots_values = roots.get_values()
+
+                    # If UBE + q_action_selection + started training + not muexplore + yes ube + deep exploration:
+                    # compute the ube q_unc prediction for each action
+                    if not self.config.standard_action_selection and start_training and not self.config.mu_explore \
+                            and 'ube' in self.config.uncertainty_architecture_type and self.config.use_deep_exploration:
+                        # Organized as [actions, environments]
+                        ube_predictions = self.get_ube_predictions(hidden_state_roots, reward_hidden_roots, env_nums, model)
 
                     for i in range(env_nums):
                         deterministic = False
@@ -365,22 +384,42 @@ class DataWorker(object):
                             value, temperature, env = roots_values[i], _temperature[i], envs[i]
                             distributions = np.ones(self.config.action_space_size)
 
-                        # In deep sea, we alternate between random actions and deterministic actions every episode 
-                        # during the first 50% of episodes budget
-                        if start_training and 'deep_sea' in self.config.env_name and total_transitions > self.config.total_transitions / 2:
+                        # In deep_sea, f > 50% of transitions or using counts without UBE, act det.
+                        if start_training and 'deep_sea' in self.config.env_name and (
+                                total_transitions > self.config.total_transitions / 2 or (
+                                         self.config.plan_with_visitation_counter
+                                         and 'ube' not in self.config.uncertainty_architecture_type
+                                         and self.config.mu_explore
+                                 )
+                                ):
                             deterministic = True
                         elif start_training and 'deep_sea' in self.config.env_name \
                                 and total_transitions % flip_deep_sea_action_selection == 0:
                             deterministic_deep_sea = not deterministic_deep_sea
                             deterministic = deterministic_deep_sea
 
-                        # In deep sea when planning with visit counter w. out UBE, we do not want random actions at any point
-                        if 'deep_sea' in self.config.env_name and self.config.plan_with_visitation_counter \
-                                and 'ube' not in self.config.uncertainty_architecture_type:
-                            distributions, value, temperature, env = roots_distributions[i], roots_values[i], _temperature[i], envs[i]
-                            deterministic = True
-
-                        action, visit_entropy = select_action(distributions, temperature=temperature, deterministic=deterministic)
+                        # If configured to use q_based action selection in exploration episodes
+                        if not self.config.standard_action_selection and start_training and i >= exploit_env_nums:
+                            q_values = roots.get_roots_children_values(self.config.discount)[i]
+                            # In exploration, the Q values are: Q + Q_unc. In MuExplore, Q_unc is computed by MCTS
+                            if self.config.mu_explore:
+                                q_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)[i]
+                                q_values = [q_value + self.config.beta * uncertainty
+                                            for (q_value, uncertainty) in zip(q_values, q_uncertainties)]
+                            # With UBE and WITHOUT MuExplore, ube_predictions need to be computed by the NN.
+                            elif 'ube' in self.config.uncertainty_architecture_type:
+                                q_uncertainties = ube_predictions[:, i]     # For all actions :, for environment i
+                                q_values = [q_value + self.config.beta * uncertainty
+                                            for (q_value, uncertainty) in zip(q_values, q_uncertainties)]
+                            else:
+                                print(f"WARNING: Using select_q_based_action in exploration episodes WITHOUT either "
+                                      f"MuExplore or UBE. If this is intended, message can be ignored.")
+                            action, visit_entropy = select_q_based_action(q_values, distributions, c=pb_c_init,
+                                                                          temperature=temperature,
+                                                                          deterministic=deterministic)
+                        else:
+                            action, visit_entropy = select_action(distributions, temperature=temperature,
+                                                                  deterministic=deterministic)
                         # MuExplore: Add state-action to visitation counter
                         if self.config.use_visitation_counter and i >= exploit_env_nums:
                             # Take the last observation that was stored, and the current action
@@ -391,16 +430,19 @@ class DataWorker(object):
                         if ori_reward > 0 and 'deep_sea' in self.config.env_name:
                             ori_reward = ori_reward * 10
                             if self.config.use_visitation_counter and self.visitation_counter is not None:
-                                print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
-                                      f"Encountered reward: {ori_reward}. Env index is :{i}. Transition is {total_transitions}. "
+                                print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$"
+                                      f"$$$$$$$$$$$$$$$$ \n"
+                                      f"Encountered reward: {ori_reward}. Env index is :{i}. "
+                                      f"Transition is {total_transitions}. "
                                       f"State is: {initial_observations_for_counter[i]}, and action is: {action} \n"
-                                      f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ \n"
+                                      f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$"
+                                      f"$$$$$$$$$$$$$$$$ \n"
                                       , flush=True)
 
-                        if self.config.mu_explore and total_transitions % self.config.test_interval == 0:
+                        if total_transitions % self.config.test_interval == 0:
                             try:
                                 # os.system("nvidia-smi")
-                                if total_transitions > 0:
+                                if self.config.mu_explore and total_transitions > 0:
                                     root_values_uncertainties = roots.get_values_uncertainty()
                                     value_max = max(value_max, np.max(roots_values))
                                     value_min = min(value_min, np.min(roots_values))
@@ -471,7 +513,7 @@ class DataWorker(object):
                             # new block trajectory
                             game_histories[i] = GameHistory(envs[i].env.action_space, max_length=self.config.history_length,
                                                             config=self.config,
-                                                            exploration_episode=(i >= exploit_env_nums and self.config.mu_explore))
+                                                            exploration_episode=(i >= exploit_env_nums and self.config.use_deep_exploration))
                             game_histories[i].init(stack_obs_windows[i])
 
                 for i in range(env_nums):
@@ -521,6 +563,44 @@ class DataWorker(object):
                                                                 self_play_rewards_max, _temperature.mean(),
                                                                 visit_entropies, 0,
                                                                 other_dist)
+
+    def get_ube_predictions(self, hidden_state_roots, reward_hidden_roots, env_nums, model):
+        """
+            Computes the ube predictions for each action at batched (abstracted) state hidden_state_roots.
+            Used for deep_exploration WITHOUT MuExplore, with action selection that is based on Q values rather than
+            only counts.
+
+            Parameters
+            ----------
+            hidden_state_roots: the output abstracted state of initial inference on batched current observations
+            reward_hidden_roots: the lstm hidden state on batched current observations
+            env_nums: number of parallel batched envs
+            model: the model used by selfplay
+        """
+        ube_predictions = []
+        hidden_state_roots = torch.from_numpy(np.asarray(hidden_state_roots)).to(self.device).float()
+        hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden_roots[0])).to(
+            self.device)
+        hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden_roots[1])).to(
+            self.device)
+        for action in range(self.config.action_space_size):
+            actions = [action for _ in range(env_nums)]
+            actions = torch.from_numpy(np.asarray(actions)).to(self.device).unsqueeze(1).long()
+            # Predict value-variance prediction for all environments and specific action
+            if self.config.amp_type == 'torch_amp':
+                with autocast():
+                    network_output = model.recurrent_inference(hidden_state_roots,
+                                                               (hidden_states_c_reward,
+                                                                hidden_states_h_reward),
+                                                               actions)
+            else:
+                network_output = model.recurrent_inference(hidden_state_roots,
+                                                           (hidden_states_c_reward,
+                                                            hidden_states_h_reward),
+                                                           actions)
+            ube_predictions.append(network_output.value_variance)
+
+        return ube_predictions
 
     def debug_deep_sea(self, model):
         """

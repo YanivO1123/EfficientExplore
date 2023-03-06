@@ -1,3 +1,4 @@
+import math
 import os
 import cv2
 import gym
@@ -301,6 +302,52 @@ def init_logger(base_path):
         handler.setFormatter(formatter)
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
+
+
+def select_q_based_action(q_values, visit_counts, c, temperature=1, deterministic=True):
+    """
+    This function implements action selection based on the paper http://proceedings.mlr.press/v119/grill20a/grill20a.pdf
+    Below equation (8):
+        action_selection ~ (action_probs ** 1/temperature) / sum_a action_probs
+        action_probs = pi_theta * e**(q_values / lambda_N)
+        pi_theta: the prior policy of the agent. In exploration, we use uniform.
+        lambda_N = c * [sqrt(visitations_action_a) / visitations_action_a, ...,
+                        sqrt(visitations_action_n) / visitations_action_n]
+    Parameters
+    __________
+    q_values: list(float)
+        the q values of the children of the root, of length action_space
+    visit_counts: list(int)
+        the visitation counts to the children of the root, of length action_space
+    c: float
+        pb_c_init from the config, the constant that decides the ratio between in-tree exploration and in-tree
+        exploitation
+    temperature: float
+        decides the intensity of random action sampling as speficied above.
+    deterministic: bool
+        if True, take the action that maximizes (action_probs ** 1/temperature) / sum_a action_probs
+    """
+    print(f"########################\n Using select_q_based_action \n ########################")
+    temperature = max(0.1, temperature)  # for numerical stability temperature is not allowed to go below 0.1
+    lambda_N = np.asarray([c * math.sqrt(visit_count) / visit_count for visit_count in visit_counts])
+    action_scores = np.asarray(q_values) / lambda_N
+    action_scores = np.exp(action_scores)
+    total_score = sum(action_scores)
+    action_probs = [score / total_score for score in action_scores]
+    action_probs = [prob ** (1 / temperature) for prob in action_probs]
+    total_prob = sum(action_probs)
+    normalized_action_probs = [prob / total_prob for prob in action_probs]
+
+    if deterministic:
+        best_actions = np.argwhere(normalized_action_probs == np.amax(normalized_action_probs)).flatten()
+        action_pos = np.random.choice(best_actions)
+        # action_pos = np.argmax([v for v in visit_counts])
+    else:
+        action_pos = np.random.choice(len(visit_counts), p=normalized_action_probs)
+    total_count = sum(visit_counts)
+    normalized_counts = [x / total_count for x in visit_counts]
+    count_entropy = entropy(normalized_counts, base=2)
+    return action_pos, count_entropy
 
 
 def select_action(visit_counts, temperature=1, deterministic=True):

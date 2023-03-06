@@ -84,7 +84,7 @@ if __name__ == '__main__':
     parser.add_argument('--plan_w_state_visits', action='store_true', default=False,
                         help="If true uses state visits. Otherwise, will use state-action visits."
                              "Only relevant if uses p_w_vis_counter, ")
-    parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube'], default='ensemble',
+    parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube'], default='rnd_ube',
                         help="Decides the type of uncertainty to be used.")
     parser.add_argument('--number_of_exploratory_envs', type=int, default=None, help='If MuExplore, number of environments <= p_mcts_num that'
                                                                                      'are exploratory')
@@ -102,6 +102,9 @@ if __name__ == '__main__':
     parser.add_argument('--periodic_ube_weight_reset', action='store_true', default=False,
                         help="If ube and periodic_ube_weight_reset, reset ube network weights every reset_ube_interval "
                              "learning steps.")
+    parser.add_argument('--q_based_action_selection', action='store_true', default=False,
+                        help="If true, uses select_q_based_action from utils instead of standard select_action."
+                             "select_q_based_action computes action based on Q vals regularized by visitations.")
     # parser.add_argument('--loss_uncertainty_weighting', action='store_true', default=False,
     #                     help="If true, weigh the value losses with uncertainty.")
 

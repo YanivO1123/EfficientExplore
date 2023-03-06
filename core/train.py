@@ -463,10 +463,12 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
         shared_storage.incr_counter.remote()
         lr = adjust_lr(config, optimizer, step_count)
 
-        # Reset ube weights if: condition
+        # Periodically reset ube weights
         if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval == 0 \
                 and 'ube' in config.uncertainty_architecture_type:
             model.ube_network.apply(fn=weight_reset)
+
+        # TODO: Periodically reset value and policy network weights
 
         # update model for self-play
         if step_count % config.checkpoint_interval == 0:
@@ -527,13 +529,11 @@ def train(config, summary_writer, model_path=None):
         target_model.load_state_dict(weights)
 
     print(f"MuExplore hyperparameters configuration: \n"
-          f"Uncertainty-architecture params: \n"
-          f"Use uncertainty architecture: {config.use_uncertainty_architecture} \n"
-          f"Type of uncertainty architecture: {config.uncertainty_architecture_type} \n"
-          f"Ensemble size: {config.ensemble_size} \n"
-          f"Use network prior: {config.use_network_prior} \n"
-          f"Exploration params: \n"
-          f"Use MuExplore in MCTS: {config.mu_explore} \n"
+          f"1. Exploration parameters: \n"
+          f"Using deep exploration: {config.use_deep_exploration} \n"
+          f"Using MuExplore - propagating uncertainty in MCTS: {config.mu_explore} \n"
+          f"Deep exploration is based on UBE without MuExplore: "
+          f"{not config.mu_explore and 'ube' in config.uncertainty_architecture_type} \n"
           f"Number of exploratory environments: {config.number_of_exploratory_envs} out of {config.p_mcts_num} envs total \n"
           f"Beta value = {config.beta} \n"
           f"Disable policy usage in exploration: {config.disable_policy_in_exploration} \n"
@@ -541,10 +541,21 @@ def train(config, summary_writer, model_path=None):
           f"Planning with visitation counter: {config.plan_with_visitation_counter} \n"
           f"Using state-visits (True), or state-action visits (False): {config.plan_with_state_visits} \n"
           f"Using FAKE visitation counter: {config.plan_with_fake_visit_counter} \n"
-          f"Exploration-targets params: \n"
+          f"\n"
+          
+          f"2. Uncertainty-architecture parameters: \n"
+          f"Using uncertainty architecture: {config.use_uncertainty_architecture} \n"
+          f"Type of uncertainty architecture: {config.uncertainty_architecture_type} \n"
+          f"Ensemble size: {config.ensemble_size} \n"
+          f"Use network prior: {config.use_network_prior} \n"
+          f"\n"
+          
+          f"3. Exploration-targets parameters: \n"
           f"use_max_value_targets = {config.use_max_value_targets} \n"
           f"use_max_policy_targets = {config.use_max_policy_targets} \n"
           f"Using learned model (MuZero): {config.learned_model}, or given dynamics model (Mu-AlphaZero): {not config.learned_model} \n"
+          f"\n"
+          
           f"Starting workers"
           , flush=True)
 
