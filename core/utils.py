@@ -327,7 +327,6 @@ def select_q_based_action(q_values, visit_counts, c, temperature=1, deterministi
     deterministic: bool
         if True, take the action that maximizes (action_probs ** 1/temperature) / sum_a action_probs
     """
-    print(f"########################\n Using select_q_based_action \n ########################")
     temperature = max(0.1, temperature)  # for numerical stability temperature is not allowed to go below 0.1
     lambda_N = np.asarray([c * math.sqrt(visit_count) / visit_count for visit_count in visit_counts])
     action_scores = np.asarray(q_values) / lambda_N

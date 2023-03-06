@@ -66,7 +66,7 @@ class AtariConfig(BaseConfig):
             # MuExplore
             # Architecture
             ensemble_size=2,
-            use_network_prior=True,
+            use_prior=True,
             prior_scale=10.0,
             # Exploration
             mu_explore=True,
@@ -147,7 +147,7 @@ class AtariConfig(BaseConfig):
                 init_zero=self.init_zero,
                 state_norm=self.state_norm,
                 ensemble_size=self.ensemble_size,
-                use_network_prior=self.use_network_prior,
+                use_network_prior=self.use_prior,
                 prior_scale=self.prior_scale
             )
         else:

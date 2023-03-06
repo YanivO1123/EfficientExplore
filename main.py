@@ -92,7 +92,9 @@ if __name__ == '__main__':
                         help="If true, use determinstic deep sea actions ")
     parser.add_argument('--architecture_type', required=False,
                         choices=['resnet', 'fully_connected'], default='resnet',
-                        help="Resnet (original), and fully-connected (custom and only applicable to Deep Sea)")
+                        help="Resnet (original), and fully-connected (custom and only applicable to Deep Sea). "
+                             "Only important to specify in environments that implement multiple architectures. "
+                             "Currently, none.")
     parser.add_argument('--sampling_times', type=int, default=0, help='If MuExplore and visitation counter, '
                                                                       'whether to use the sampled value '
                                                                       'propagation or not. Defaults to not')

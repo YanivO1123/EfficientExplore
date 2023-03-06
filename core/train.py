@@ -547,7 +547,7 @@ def train(config, summary_writer, model_path=None):
           f"Using uncertainty architecture: {config.use_uncertainty_architecture} \n"
           f"Type of uncertainty architecture: {config.uncertainty_architecture_type} \n"
           f"Ensemble size: {config.ensemble_size} \n"
-          f"Use network prior: {config.use_network_prior} \n"
+          f"Use network prior: {config.use_prior} \n"
           f"\n"
           
           f"3. Exploration-targets parameters: \n"

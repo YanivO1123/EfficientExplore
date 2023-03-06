@@ -52,13 +52,9 @@ def concat_output_reward_variance(output_lst):
 
 
 def concat_output(output_lst):
-    #TODO: This is used by reanalyze to compute fresh predictions. In reanlyze, in basic MuExplore,
-    # the variances are not used (they are used to provide targets for UBE, if UBE is used)
-
     # concat the model output
     value_lst, reward_lst, policy_logits_lst, hidden_state_lst = [], [], [], []
     reward_hidden_c_lst, reward_hidden_h_lst =[], []
-    # value_variance_lst, value_prefix_variance_list = [], []
     for output in output_lst:
         value_lst.append(output.value)
         reward_lst.append(output.value_prefix)
@@ -66,8 +62,6 @@ def concat_output(output_lst):
         hidden_state_lst.append(output.hidden_state)
         reward_hidden_c_lst.append(output.reward_hidden[0].squeeze(0))
         reward_hidden_h_lst.append(output.reward_hidden[1].squeeze(0))
-        # value_variance_lst.append(output.value_variance)
-        # value_prefix_variance_list.append(output.value_prefix_variance)
 
     value_lst = np.concatenate(value_lst)
     reward_lst = np.concatenate(reward_lst)
@@ -76,8 +70,6 @@ def concat_output(output_lst):
     hidden_state_lst = np.concatenate(hidden_state_lst)
     reward_hidden_c_lst = np.expand_dims(np.concatenate(reward_hidden_c_lst), axis=0)
     reward_hidden_h_lst = np.expand_dims(np.concatenate(reward_hidden_h_lst), axis=0)
-    # value_variance_lst = np.concatenate(value_variance_lst)
-    # value_prefix_variance_list = np.concatenate(value_prefix_variance_list)
 
     return value_lst, reward_lst, policy_logits_lst, hidden_state_lst, (reward_hidden_c_lst, reward_hidden_h_lst)
 
@@ -86,7 +78,6 @@ def concat_uncertainty_output(output_lst):
     # concat the model output
     value_variance_lst, reward_variance_lst, policy_logits_lst, hidden_state_lst = [], [], [], []
     reward_hidden_c_lst, reward_hidden_h_lst = [], []
-    # value_variance_lst, value_prefix_variance_list = [], []
     for output in output_lst:
         value_variance_lst.append(output.value_variance)
         reward_variance_lst.append(output.value_prefix_variance)
@@ -184,7 +175,6 @@ class BaseNet(nn.Module):
             # Reward-variance is zeros
             value_prefix_variance = torch.tensor([0. for _ in range(next_state.shape[0])])
 
-
         # Case ensemble
         if 'ensemble' in self.uncertainty_type:
             # The predictions of ensembles are always detached, because there's nothing that should be trained
@@ -201,10 +191,11 @@ class BaseNet(nn.Module):
                 # (previous state + action)
                 value_prefix_variance = value_variance + 0.1 * self.compute_reward_rnd_uncertainty(previous_state.detach(),
                                                                         action.detach()).detach()
-            # Give more weight to rnd_value_unc in the MCTS tree, for recognition of new states
+
+            # The below will give more weight to rnd_value_unc in the MCTS tree, for recognition of new states
             # if not self.training:
             #     value_variance = self.value_rnd_propagation_scale * self.compute_value_rnd_uncertainty(next_state.detach()).detach()
-        # Case UBE with either. The prediction of UBE is not detached.
+        # Case UBE with either. The prediction of UBE is not detached, only the input.
         if 'ube' in self.uncertainty_type:
             # We add the UBE uncertainty to the current value_variance. We squeeze ube_unc to return prediction of shape
             # [batch_size] not in training, but prediction of shape [batch_size, 1] in training

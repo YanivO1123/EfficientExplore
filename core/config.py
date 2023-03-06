@@ -78,7 +78,7 @@ class BaseConfig(object):
                  use_visitation_counter: bool = False,
                  plan_with_visitation_counter: bool = False,
                  ensemble_size: int = 5,
-                 use_network_prior: bool = False,
+                 use_prior: bool = False,
                  prior_scale: float = 10.0,
                  beta: float = 1,
                  disable_policy_in_exploration: bool = True,
@@ -222,7 +222,7 @@ class BaseConfig(object):
             Whether to use the visitation counter in planning with MCTS and muexplore, or only for debugging purposes
         ensemble_size: int
             The number of ensemble-heads, both for value prediction as well as value prefix prediction.
-        use_network_prior: bool
+        use_prior: bool
             Whether to use prior functions on the ensemble heads, or not
         prior_scale: float
             The scale of the prior in the computation
@@ -362,7 +362,7 @@ class BaseConfig(object):
 
         # ensemble
         self.ensemble_size = ensemble_size
-        self.use_network_prior = use_network_prior
+        self.use_prior = use_prior
         self.prior_scale = prior_scale
 
         # rnd
@@ -556,7 +556,7 @@ class BaseConfig(object):
             if self.plan_with_visitation_counter:
                 self.plan_with_fake_visit_counter = args.plan_w_fake_visit_counter
                 self.plan_with_state_visits = args.plan_w_state_visits
-            self.architecture_type = args.architecture_type     # Only in deep_sea multiple arch.s are implemented
+            self.architecture_type = 'fully_connected'     # Only fully_connected is implemented for deep_sea
             self.learned_model = not args.alpha_zero_planning   # AlphaZero is only implemented in deep_sea
             self.deepsea_randomize_actions = not args.det_deepsea_actions
 

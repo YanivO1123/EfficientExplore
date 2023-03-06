@@ -4,7 +4,7 @@ from core.config import BaseConfig
 from core.utils import make_deepsea, EpisodicLifeEnv
 from core.dataset import Transforms
 from config.deepsea.env_wrapper import DeepSeaWrapper
-from config.deepsea.model import EfficientZeroNet, FullyConnectedEfficientExploreNet, EfficientExploreNet
+from config.deepsea.model import FullyConnectedEfficientExploreNet
 from core.config import DiscreteSupport
 import bsuite
 from bsuite.utils import gym_wrapper
@@ -15,7 +15,7 @@ class DeepSeaConfig(BaseConfig):
         super(DeepSeaConfig, self).__init__(
             training_steps=40 * 1000, #100000,
             last_steps=0,#20000
-            test_interval=200, #10000, 500
+            test_interval=100, #10000, 500
             log_interval=500,
             vis_interval=100,   # 1000
             test_episodes=8, # 32,
@@ -47,7 +47,7 @@ class DeepSeaConfig(BaseConfig):
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=1000,   # 500 400 32 5000 1000
+            start_transitions=32,   # 500 400 32 5000 1000
             total_transitions=40 * 1000,
             transition_num=1,
             do_consistency=False,
@@ -73,7 +73,7 @@ class DeepSeaConfig(BaseConfig):
             # MuExplore
             # Architecture
             ensemble_size=3,
-            use_network_prior=True,
+            use_prior=True,
             prior_scale=10.0,
             # visitation counter
             use_visitation_counter=False,
@@ -145,92 +145,37 @@ class DeepSeaConfig(BaseConfig):
         self.action_space_size = game.action_space_size
 
     def get_uniform_network(self):
-        if self.architecture_type == 'fully_connected':
-            return FullyConnectedEfficientExploreNet(
-                self.obs_shape,
-                self.action_space_size,
-                self.fc_state_prediction_layers,
-                self.fc_reward_layers,
-                self.fc_value_layers,
-                self.fc_policy_layers,
-                self.fc_rnd_layers,
-                self.fc_ube_layers,
-                self.value_support.size,
-                self.reward_support.size,
-                self.inverse_value_transform,
-                self.inverse_reward_transform,
-                self.fc_lstm_hidden_size,
-                momentum=self.bn_mt,
-                proj_hid=self.proj_hid,
-                proj_out=self.proj_out,
-                pred_hid=self.pred_hid,
-                pred_out=self.pred_out,
-                init_zero=self.init_zero,
-                rnd_scale=self.rnd_scale,
-                learned_model=self.learned_model,
-                env_size=self.env_size,
-                mapping_seed=self.seed,
-                randomize_actions=self.deepsea_randomize_actions,
-                uncertainty_type=self.uncertainty_architecture_type
-            )
-        elif self.use_uncertainty_architecture:
-            return EfficientExploreNet(
-                self.obs_shape,
-                self.action_space_size,
-                self.blocks,
-                self.channels,
-                self.reduced_channels_reward,
-                self.reduced_channels_value,
-                self.reduced_channels_policy,
-                self.resnet_fc_reward_layers,
-                self.resnet_fc_value_layers,
-                self.resnet_fc_policy_layers,
-                self.resnet_fc_rnd_layers,
-                self.reward_support.size,
-                self.value_support.size,
-                self.downsample,
-                self.inverse_value_transform,
-                self.inverse_reward_transform,
-                self.lstm_hidden_size,
-                bn_mt=self.bn_mt,
-                proj_hid=self.proj_hid,
-                proj_out=self.proj_out,
-                pred_hid=self.pred_hid,
-                pred_out=self.pred_out,
-                init_zero=self.init_zero,
-                state_norm=self.state_norm,
-                ensemble_size=self.ensemble_size,
-                use_network_prior=self.use_network_prior,
-                prior_scale=self.prior_scale,
-                uncertainty_type=self.uncertainty_architecture_type,
-                rnd_scale=self.rnd_scale,
-            )
-        else:
-            return EfficientZeroNet(
-                self.obs_shape,
-                self.action_space_size,
-                self.blocks,
-                self.channels,
-                self.reduced_channels_reward,
-                self.reduced_channels_value,
-                self.reduced_channels_policy,
-                self.resnet_fc_reward_layers,
-                self.resnet_fc_value_layers,
-                self.resnet_fc_policy_layers,
-                self.reward_support.size,
-                self.value_support.size,
-                self.downsample,
-                self.inverse_value_transform,
-                self.inverse_reward_transform,
-                self.lstm_hidden_size,
-                bn_mt=self.bn_mt,
-                proj_hid=self.proj_hid,
-                proj_out=self.proj_out,
-                pred_hid=self.pred_hid,
-                pred_out=self.pred_out,
-                init_zero=self.init_zero,
-                state_norm=self.state_norm,
-            )
+        return FullyConnectedEfficientExploreNet(
+            self.obs_shape,
+            self.action_space_size,
+            self.fc_state_prediction_layers,
+            self.fc_reward_layers,
+            self.fc_value_layers,
+            self.fc_policy_layers,
+            self.fc_rnd_layers,
+            self.fc_ube_layers,
+            self.value_support.size,
+            self.reward_support.size,
+            self.inverse_value_transform,
+            self.inverse_reward_transform,
+            self.fc_lstm_hidden_size,
+            momentum=self.bn_mt,
+            proj_hid=self.proj_hid,
+            proj_out=self.proj_out,
+            pred_hid=self.pred_hid,
+            pred_out=self.pred_out,
+            init_zero=self.init_zero,
+            rnd_scale=self.rnd_scale,
+            learned_model=self.learned_model,
+            env_size=self.env_size,
+            mapping_seed=self.seed,
+            randomize_actions=self.deepsea_randomize_actions,
+            uncertainty_type=self.uncertainty_architecture_type,
+            discount=self.discount,
+            ensemble_size=self.ensemble_size,
+            use_prior=self.use_prior,
+            prior_scale=self.prior_scale,
+        )
 
     def new_game(self, seed=None, save_video=False, save_path=None, video_callable=None, uid=None, test=False,
                  final_test=False):
