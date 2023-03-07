@@ -366,7 +366,7 @@ class BaseConfig(object):
         self.prior_scale = prior_scale
 
         # rnd
-        self.rnd_scale = 1  # 2
+        self.rnd_scale = 0.5  # 2
 
         # exploration
         self.use_deep_exploration = False       # Activated in set_config if mu_explore or ube

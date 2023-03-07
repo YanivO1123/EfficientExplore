@@ -459,7 +459,7 @@ class DataWorker(object):
                                         f"{value_unc_sum / (total_transitions * self.config.number_of_exploratory_envs / self.config.p_mcts_num)} \n"
                                         , flush=True)
                                 if self.config.use_visitation_counter:
-                                    print(f"Printing the state-action visitation counter at the last row: \n"
+                                    print(f"Printing the state-action visitation counter at the last row, at transition number {total_transitions}: \n"
                                           f"{self.visitation_counter.sa_counts[-1, :, :]} \n"
                                           # f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
                                           f"Printing the state visitation counter: \n"
@@ -600,7 +600,7 @@ class DataWorker(object):
                                                            actions)
             ube_predictions.append(network_output.value_variance)
 
-        return ube_predictions
+        return np.asarray(ube_predictions)
 
     def debug_deep_sea(self, model):
         """

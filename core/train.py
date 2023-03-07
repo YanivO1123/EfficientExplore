@@ -321,10 +321,14 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     # weighted loss with masks (some invalid states which are out of trajectory.)
     loss = (config.consistency_coeff * consistency_loss + config.policy_loss_coeff * policy_loss +
             config.value_loss_coeff * value_loss + config.reward_loss_coeff * value_prefix_loss)
-    # Let's test for shapes of loss
+    if torch.isnan(rnd_loss).any():
+        print(
+            f"$$$$$$$$$$$$$$$$$$$$$\n There are nans in rnd_loss. rnd_loss = {rnd_loss} \n $$$$$$$$$$$$$$$$$$$$$\n")
+    if torch.isnan(rnd_loss).any():
+        print(
+            f"$$$$$$$$$$$$$$$$$$$$$\n There are nans in ube_loss. ube_loss = {ube_loss} \n $$$$$$$$$$$$$$$$$$$$$\n")
     if 'rnd' in config.uncertainty_architecture_type:
         loss += rnd_loss
-    # Let's test for shapes of loss
     if 'ube' in config.uncertainty_architecture_type:
         loss += ube_loss * config.ube_loss_coeff
     # Let's test for shapes of loss
