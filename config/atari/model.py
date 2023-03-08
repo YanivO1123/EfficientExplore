@@ -808,9 +808,9 @@ class EfficientExploreNet(EfficientZeroNet):
         action_one_hot = (
                 action[:, :, None, None] * action_one_hot / self.action_space_size
         )
-        x = torch.cat((state, action_one_hot), dim=1).detach()
+        x = torch.cat((state, action_one_hot), dim=1)
         # Reshape to flat FC input
-        x = x.reshape(-1, self.input_size_reward_rnd)
+        x = x.reshape(-1, self.input_size_reward_rnd).detach()
         # Compute the RND uncertainty
         return self.rnd_scale * torch.nn.functional.mse_loss(self.reward_rnd_network(x),
                                                              self.reward_rnd_target_network(x).detach(),
