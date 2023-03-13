@@ -544,7 +544,7 @@ class BaseConfig(object):
             training_steps_per_episode_ratio = self.training_ratio * self.p_mcts_num * self.env_size
             self.checkpoint_interval = min(self.checkpoint_interval, training_steps_per_episode_ratio)
             # We compute target_model_interval as once every M batched episodes.
-            M = 4
+            M = 1
             self.target_model_interval = min(self.target_model_interval, M * training_steps_per_episode_ratio)
             # Reset ube every N batched episodes
             N = 20
@@ -614,7 +614,7 @@ class BaseConfig(object):
         assert self.start_transitions >= self.batch_size
 
         # augmentation
-        if self.consistency_coeff > 0 and args.use_augmentation:
+        if self.consistency_coeff > 0 and args.use_augmentation and 'deep_sea' not in args.case:
             self.use_augmentation = True
             self.augmentation = args.augmentation
         else:

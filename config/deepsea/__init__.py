@@ -13,7 +13,7 @@ from bsuite.utils import gym_wrapper
 class DeepSeaConfig(BaseConfig):
     def __init__(self):
         super(DeepSeaConfig, self).__init__(
-            training_steps=40 * 1000, #100000,
+            training_steps=50 * 1000, #100000,
             last_steps=0,#20000
             test_interval=100, #10000, 500
             log_interval=500,
@@ -43,12 +43,12 @@ class DeepSeaConfig(BaseConfig):
             lr_warm_up=0.01,
             lr_init=0.2,    # original 0.2
             lr_decay_rate=0.1,     # 0.1
-            lr_decay_steps=40 * 1000,
+            lr_decay_steps=50 * 1000,
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=32,   # 500 400 32 5000 1000
-            total_transitions=40 * 1000,
+            start_transitions=2000,   # 500 400 32 5000 1000
+            total_transitions=50 * 1000,
             transition_num=1,
             do_consistency=False,
             # frame skip & stack observation
@@ -84,7 +84,7 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            reset_ube_interval=2 * 1000,
+            reset_ube_interval=500,
         )
         self.start_transitions = max(1, self.start_transitions)
 
@@ -110,7 +110,8 @@ class DeepSeaConfig(BaseConfig):
         self.fc_value_layers = [128, 128] # [64, 64]
         self.fc_policy_layers = [128, 128] # [64, 64]
         self.fc_ube_layers = [128, 128, 128]
-        self.fc_rnd_layers = [1024, 1024, 1024, 256]
+        self.fc_rnd_layers = [1024, 256]
+        self.fc_rnd_target_layers = [1024, 1024, 1024, 256]
         self.fc_lstm_hidden_size = self.lstm_hidden_size
 
         # To reduce the effect of the policy on the selection, we reduce pb_c_init to 0.5.
@@ -145,7 +146,7 @@ class DeepSeaConfig(BaseConfig):
         self.action_space_size = game.action_space_size
 
     def get_uniform_network(self):
-        return FullyConnectedEfficientExploreNet(
+        model = FullyConnectedEfficientExploreNet(
             self.obs_shape,
             self.action_space_size,
             self.fc_state_prediction_layers,
@@ -153,6 +154,7 @@ class DeepSeaConfig(BaseConfig):
             self.fc_value_layers,
             self.fc_policy_layers,
             self.fc_rnd_layers,
+            self.fc_rnd_target_layers,
             self.fc_ube_layers,
             self.value_support.size,
             self.reward_support.size,
@@ -176,6 +178,13 @@ class DeepSeaConfig(BaseConfig):
             use_prior=self.use_prior,
             prior_scale=self.prior_scale,
         )
+        for p in model.value_rnd_target_network.parameters():
+            with torch.no_grad():
+                p *= 4
+        for p in model.reward_rnd_target_network.parameters():
+            with torch.no_grad():
+                p *= 4
+        return model
 
     def new_game(self, seed=None, save_video=False, save_path=None, video_callable=None, uid=None, test=False,
                  final_test=False):

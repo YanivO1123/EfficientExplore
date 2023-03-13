@@ -672,7 +672,7 @@ class BatchWorker_GPU(object):
                                               rewards_uncertainty_mask[rewards_index]
                         rewards_index += 1
                     if current_index < traj_len_non_re:
-                        target_ubes.append(ube_lst[ube_index])
+                        target_ubes.append(min(ube_lst[ube_index], 100))
                     else:
                         target_ubes.append(0)
                     ube_index += 1

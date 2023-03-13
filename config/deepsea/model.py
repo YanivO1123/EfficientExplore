@@ -53,6 +53,40 @@ def mlp(
     return nn.Sequential(*layers)
 
 
+def no_batch_norm_mlp(
+        input_size,
+        layer_sizes,
+        output_size,
+        output_activation=torch.nn.Identity,
+        activation=torch.nn.ReLU,
+        init_zero=False,
+):
+    """MLP layers without batch normalization.
+        Parameters
+        ----------
+        input_size: int
+            dim of inputs
+        layer_sizes: list
+            dim of hidden layers
+        output_size: int
+            dim of outputs
+        init_zero: bool
+            zero initialization for the last layer (including w and b).
+            This can provide stable zero outputs in the beginning.
+    """
+    sizes = [input_size] + layer_sizes + [output_size]
+    layers = []
+    for i in range(len(sizes) - 1):
+        act = activation if i < len(sizes) - 2 else output_activation
+        layers += [torch.nn.Linear(sizes[i], sizes[i + 1]), act()]
+
+    if init_zero:
+        layers[-2].weight.data.fill_(0)
+        layers[-2].bias.data.fill_(0)
+
+    return torch.nn.Sequential(*layers)
+
+
 class FullyConnectedEfficientExploreNet(BaseNet):
     def __init__(self,
                  observation_shape,
@@ -62,6 +96,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  fc_value_layers,
                  fc_policy_layers,
                  fc_rnd_layers,
+                 fc_rnd_target_layers,
                  fc_ube_layers,
                  reward_support_size,
                  value_support_size,
@@ -181,20 +216,18 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         if 'rnd' in uncertainty_type:
             self.rnd_scale = rnd_scale
             self.input_size_value_rnd = self.encoded_state_size
-            self.input_size_reward_rnd = self.dynamics_input_size
+            self.input_size_reward_rnd = observation_shape[0] * observation_shape[1] * observation_shape[2] + \
+                                         observation_shape[0] * action_space_size
             # It's important that the RND nets are NOT initiated with zero
-            self.reward_rnd_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
-                                          init_zero=False,
-                                          momentum=momentum)
-            self.reward_rnd_target_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
-                                                 init_zero=False,
-                                                 momentum=momentum)
-            self.value_rnd_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
-                                         init_zero=False,
-                                         momentum=momentum)
-            self.value_rnd_target_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
-                                                init_zero=False,
-                                                momentum=momentum)
+            self.reward_rnd_network = no_batch_norm_mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1],
+                                                        fc_rnd_layers[-1], init_zero=False)
+            self.reward_rnd_target_network = no_batch_norm_mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1],
+                                                               fc_rnd_layers[-1], init_zero=False)
+            self.value_rnd_network = no_batch_norm_mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+                                                       init_zero=False)
+            self.value_rnd_target_network = no_batch_norm_mlp(self.input_size_value_rnd, fc_rnd_layers[:-1],
+                                                              fc_rnd_layers[-1],
+                                                              init_zero=False)
             # The value_rnd_unc_prop coeff is the sum of a geometric series with r = gamma ** 2 and n = env_size
             self.value_rnd_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
 
@@ -281,26 +314,21 @@ class FullyConnectedEfficientExploreNet(BaseNet):
     def compute_reward_rnd_uncertainty(self, state, action):
         # Turn in a state_action vector
         action_one_hot = (
-            torch.ones(
+            torch.zeros(
                 (
                     state.shape[0],  # batch dimension
-                    1,  # channels dimension
-                    state.shape[2],  # H dim
-                    state.shape[3],  # W dim
+                    self.action_space_size
                 )
             )
             .to(action.device)
             .float()
         )
-        action_one_hot = (
-                action[:, :, None, None] * action_one_hot / self.action_space_size
-        )
-        x = torch.cat((state, action_one_hot), dim=1)
-        # Reshape to flat FC input
-        x = x.reshape(-1, self.input_size_reward_rnd).detach()
+        action_one_hot[action.long()] = 1
+        flattened_state = state.reshape(-1, self.input_size_reward_rnd - self.action_space_size)
+        state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
         # Compute the RND uncertainty
-        return self.rnd_scale * torch.nn.functional.mse_loss(self.reward_rnd_network(x),
-                                                             self.reward_rnd_target_network(x).detach(),
+        return self.rnd_scale * torch.nn.functional.mse_loss(self.reward_rnd_network(state_action),
+                                                             self.reward_rnd_target_network(state_action).detach(),
                                                              reduction='none').sum(dim=-1)
 
     def compute_ube_uncertainty(self, state):
