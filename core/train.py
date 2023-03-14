@@ -16,7 +16,7 @@ from core.replay_buffer import ReplayBuffer
 from core.storage import SharedStorage, QueueStorage
 from core.selfplay_worker import DataWorker
 from core.reanalyze_worker import BatchWorker_GPU, BatchWorker_CPU
-from core.utils import weight_reset, uncertainty_to_loss_weight
+from core.utils import weight_reset, uncertainty_to_loss_weight, prepare_observation_lst
 
 from core.visitation_counter import CountUncertainty
 import traceback
@@ -457,6 +457,16 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
     # recent_weights is the param of the target model
     recent_weights = model.get_weights()
 
+    # To debug uncertainty
+    if 'deep_sea' in config.env_name:
+        try:
+            visit_counter = CountUncertainty(name=config.env_name, num_envs=config.p_mcts_num,
+                                             mapping_seed=config.seed,
+                                             fake=config.plan_with_fake_visit_counter,
+                                             randomize_actions=config.deepsea_randomize_actions)
+        except:
+            traceback.print_exc()
+
     # while loop
     while step_count < config.training_steps + config.last_steps:
         # remove data if the replay buffer is full. (more data settings)
@@ -472,13 +482,8 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
         lr = adjust_lr(config, optimizer, step_count)
 
         # Periodically reset ube weights
-        if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval == 0 \
-                and 'ube' in config.uncertainty_architecture_type:
-            model.ube_network.apply(fn=weight_reset)
-            print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
-                  f"UBE network weights have been reset! \n"
-                  f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
-                  , flush=True)
+        if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval == 0:
+            reset_weights(model, config, step_count)
 
         # update model for self-play
         if step_count % config.checkpoint_interval == 0:
@@ -493,6 +498,14 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             vis_result = True
         else:
             vis_result = False
+
+        # To debug uncertainty
+        if 'deep_sea' in config.env_name and True:
+            try:
+                debug_uncertainty(model=model, config=config, training_step=step_count, device=config.device,
+                                  visit_counter=visit_counter, batch=batch)
+            except:
+                traceback.print_exc()
 
         if config.amp_type == 'torch_amp':
             log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count)
@@ -659,9 +672,8 @@ def get_rnd_loss(model, state, batch_size, device, amp_type, action=None):
             local_loss += torch.nn.functional.mse_loss(model.value_rnd_network(state_for_rnd),
                                                        model.value_rnd_target_network(state_for_rnd).detach(),
                                                        reduction='none').sum(dim=-1)
-
+            # Compute reward_rnd loss
             if action is not None:
-                # Compute reward_rnd loss
                 action_one_hot = (
                     torch.zeros(
                         (
@@ -684,9 +696,8 @@ def get_rnd_loss(model, state, batch_size, device, amp_type, action=None):
         local_loss += torch.nn.functional.mse_loss(model.value_rnd_network(state_for_rnd),
                                                    model.value_rnd_target_network(state_for_rnd).detach(),
                                                    reduction='none').sum(dim=-1)
-
+        # Compute reward_rnd loss
         if action is not None:
-            # Compute reward_rnd loss
             action_one_hot = (
                 torch.zeros(
                     (
@@ -703,5 +714,165 @@ def get_rnd_loss(model, state, batch_size, device, amp_type, action=None):
             local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),
                                                        model.reward_rnd_target_network(state_action).detach(),
                                                        reduction='none').sum(dim=-1)
-
     return local_loss
+
+
+def reset_weights(model, config, step_count):
+    if 'ube' in config.uncertainty_architecture_type:
+        model.ube_network.apply(fn=weight_reset)
+        print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+              f"ube_network has been reset, at training step: {step_count}\n"
+              f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+              , flush=True)
+    if 'rnd' in config.uncertainty_architecture_type:
+        model.reward_rnd_network.apply(fn=weight_reset)
+        model.reward_rnd_target_network.apply(fn=weight_reset)
+        model.value_rnd_network.apply(fn=weight_reset)
+        model.value_rnd_target_network.apply(fn=weight_reset)
+        for p in model.value_rnd_target_network.parameters():
+            with torch.no_grad():
+                p *= 4
+        for p in model.reward_rnd_target_network.parameters():
+            with torch.no_grad():
+                p *= 4
+        print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+              f"both rnd networks have been reset, at training step: {step_count} \n"
+              f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+              , flush=True)
+
+
+def debug_uncertainty(model, config, training_step, device, visit_counter, batch):
+    with torch.no_grad():
+        env_size = config.env_size
+        inputs_batch, targets_batch = batch
+        obs_batch_ori, action_batch, _, _, _, _ = inputs_batch
+        actions = torch.from_numpy(action_batch).to(config.device).unsqueeze(-1).long()
+        obs_batch_ori = torch.from_numpy(obs_batch_ori).to(config.device).float()
+        trained_states = obs_batch_ori[:, 0: config.stacked_observations * config.image_channel, :, :]
+
+        target_value_prefix, target_value, target_policy, target_ube = targets_batch
+
+        if training_step % config.reset_ube_interval == 0:
+            visit_counter.s_counts = np.zeros(shape=visit_counter.observation_space_shape)
+            visit_counter.sa_counts = np.zeros(shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
+
+        if training_step % 100 == 0:
+            # Setup observations for every state in the 10 by 10 deep_sea
+            num_columns = env_size
+            num_rows = env_size
+            batched_obs = []
+            for row in range(num_rows):
+                row_observations = []
+                for column in range(num_columns):
+                    current_obs = np.zeros(shape=(num_rows, num_columns))
+                    current_obs[row, column] = 1
+                    current_obs = current_obs[np.newaxis, :]
+                    row_observations.append(current_obs)
+                batched_obs.append(row_observations)
+
+            # Setup metrics we're interested in
+            row_value_rnds = []
+            row_reward_unc_left = []
+            row_reward_unc_right = []
+            final_value_uncertainty_prediction = []
+            row_ube_predictions = []
+
+            # Compute uncertainty metrics for each state, batched row by row
+            for row in range(num_rows):
+                stack_obs = prepare_observation_lst(batched_obs[row])
+                stack_obs = torch.from_numpy(stack_obs).to(device)
+                if config.amp_type == 'torch_amp':
+                    with autocast():
+                        network_output_init = model.initial_inference(stack_obs.float())
+
+                        # Prepare for recurrent inf
+                        hidden_states = network_output_init.hidden_state
+                        hidden_states_c_reward = network_output_init.reward_hidden[0]
+                        hidden_states_h_reward = network_output_init.reward_hidden[1]
+                        actions_left = torch.zeros(size=(num_columns, 1)).to(device).long()
+                        actions_right = torch.ones(size=(num_columns, 1)).to(device).long()
+
+                        value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
+                        ube_predictions = model.compute_ube_uncertainty(hidden_states)
+
+                        network_output_recur_left = model.recurrent_inference(hidden_states,
+                                                                              (hidden_states_c_reward, hidden_states_h_reward),
+                                                                              actions_left)
+                        network_output_recur_right = model.recurrent_inference(hidden_states,
+                                                                               (hidden_states_c_reward, hidden_states_h_reward),
+                                                                               actions_right)
+                else:
+                    network_output_init = model.initial_inference(stack_obs.float())
+
+                    # Prepare for recurrent inf
+                    hidden_states = network_output_init.hidden_state
+                    hidden_states_c_reward = network_output_init.reward_hidden[0]
+                    hidden_states_h_reward = network_output_init.reward_hidden[1]
+                    actions_left = torch.zeros(size=(num_columns, 1)).to(device).long()
+                    actions_right = torch.ones(size=(num_columns, 1)).to(device).long()
+
+                    value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
+                    ube_predictions = model.compute_ube_uncertainty(hidden_states)
+
+                    network_output_recur_left = model.recurrent_inference(hidden_states,
+                                                                          (hidden_states_c_reward, hidden_states_h_reward),
+                                                                          actions_left)
+                    network_output_recur_right = model.recurrent_inference(hidden_states,
+                                                                           (hidden_states_c_reward, hidden_states_h_reward),
+                                                                           actions_right)
+                row_value_rnds.append(value_rnds)
+                row_reward_unc_left.append(network_output_recur_left.value_prefix_variance)
+                row_reward_unc_right.append(network_output_recur_right.value_prefix_variance)
+                final_value_uncertainty_prediction.append(network_output_init.value_variance)
+                row_ube_predictions.append(ube_predictions)
+
+            final_value_uncertainty_prediction = torch.stack(final_value_uncertainty_prediction, dim=0)
+            row_value_rnds = torch.stack(row_value_rnds, dim=0)
+
+            # Print state counts
+            print(f"*********************************************************\n"
+                  f"At training step {training_step}, debug-prints for RND and UBE.")
+            # print(f"Printing state counts: \n"
+            #       f"{visit_counter.s_counts}"
+            #       , flush=True)
+            print(f"Value RND scores for states: \n"
+                  f"{row_value_rnds}", flush=True)
+            # print(f"UBE + RND scores for states: \n"
+            #       f"{final_value_uncertainty_prediction}", flush=True)
+            print(f"UBE scores for states:", flush=True)
+            for row in range(num_rows):
+                print(row_ube_predictions[row])
+            print(f"The targets for UBE at THIS SPECIFIC time step: \n "
+                  f"{target_ube}")
+            # print(f"Now printing state-action \n "
+            #       f"State-action visitations counts: \n"
+            #       f"{visit_counter.sa_counts}"
+            #       , flush=True)
+            # print(f"Reward uncertainty for action 0:", flush=True)
+            # for row in range(num_rows):
+            #     print(row_reward_unc_left[row])
+            # print(f"Reward uncertainty for action 1:", flush=True)
+            # for row in range(num_rows):
+            #     print(row_reward_unc_right[row])
+            # print(f"Finally, let's do one more prediction for the zeros-state")
+            stack_obs = torch.zeros(size=(2, 1, num_rows, num_columns,)).to(device).float()
+            if config.amp_type == 'torch_amp':
+                with autocast():
+                    network_output_init = model.initial_inference(stack_obs)
+                    hidden_states = network_output_init.hidden_state
+                    value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
+            else:
+                network_output_init = model.initial_inference(stack_obs)
+                hidden_states = network_output_init.hidden_state
+                value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
+            print(f"UBE prediction for the zero obs is: {network_output_init.value_variance[0]} \n"
+                  f"value_RND prediction for the zero obs is: {value_rnds[0]}")
+
+        # Because this function is called BEFORE training, we observe AFTER we print
+        # Observe all states in trained_states with the visit_counter
+        batch_size = trained_states.shape[0]
+        actions = actions.cpu().long().numpy().squeeze()
+        for i in range(batch_size):
+            observation = trained_states[i, -1, :, :].cpu().long().numpy()
+            action = actions[i]
+            visit_counter.observe(observation, action)

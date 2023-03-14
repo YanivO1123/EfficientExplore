@@ -222,12 +222,12 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             # It's important that the RND nets are NOT initiated with zero
             self.reward_rnd_network = no_batch_norm_mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1],
                                                         fc_rnd_layers[-1], init_zero=False)
-            self.reward_rnd_target_network = no_batch_norm_mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1],
-                                                               fc_rnd_layers[-1], init_zero=False)
+            self.reward_rnd_target_network = no_batch_norm_mlp(self.input_size_reward_rnd, fc_rnd_target_layers[:-1],
+                                                               fc_rnd_target_layers[-1], init_zero=False)
             self.value_rnd_network = no_batch_norm_mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
                                                        init_zero=False)
-            self.value_rnd_target_network = no_batch_norm_mlp(self.input_size_value_rnd, fc_rnd_layers[:-1],
-                                                              fc_rnd_layers[-1],
+            self.value_rnd_target_network = no_batch_norm_mlp(self.input_size_value_rnd, fc_rnd_target_layers[:-1],
+                                                              fc_rnd_target_layers[-1],
                                                               init_zero=False)
             # The value_rnd_unc_prop coeff is the sum of a geometric series with r = gamma ** 2 and n = env_size
             self.value_rnd_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
