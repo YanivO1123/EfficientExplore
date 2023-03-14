@@ -84,9 +84,9 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            reset_ube_interval=200,
-            rnd_scale=0.2,
-            ube_scale=10,
+            reset_ube_interval=500,
+            rnd_scale=1,
+            ube_scale=1,
         )
         self.start_transitions = max(1, self.start_transitions)
 
@@ -113,7 +113,7 @@ class DeepSeaConfig(BaseConfig):
         self.fc_policy_layers = [128, 128] # [64, 64]
         self.fc_ube_layers = [128, 128, 128]
         self.fc_rnd_layers = [1024, 256]
-        self.fc_rnd_target_layers = [1024, 1024, 1024, 256]
+        self.fc_rnd_target_layers = [1024, 1024, 256]
         self.fc_lstm_hidden_size = self.lstm_hidden_size
 
         # To reduce the effect of the policy on the selection, we reduce pb_c_init to 0.5.
@@ -182,10 +182,10 @@ class DeepSeaConfig(BaseConfig):
         )
         for p in model.value_rnd_target_network.parameters():
             with torch.no_grad():
-                p *= 4
+                p *= 3
         for p in model.reward_rnd_target_network.parameters():
             with torch.no_grad():
-                p *= 4
+                p *= 3
         return model
 
     def new_game(self, seed=None, save_video=False, save_path=None, video_callable=None, uid=None, test=False,

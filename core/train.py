@@ -45,7 +45,8 @@ def adjust_lr(config, optimizer, step_count):
     return lr
 
 
-def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result=False, step_count=None):
+def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result=False, step_count=None,
+                   rnd_optimizer=None):
     """update models given a batch data
     Parameters
     ----------
@@ -287,7 +288,8 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
             value_loss += config.scalar_value_loss(value, target_value_phi[:, step_i + 1]) * mask_batch[:, step_i]
             value_prefix_loss += config.scalar_reward_loss(value_prefix, target_value_prefix_phi[:, step_i]) * mask_batch[:, step_i]
             # Follow MuZero, set half gradient
-            hidden_state.register_hook(lambda grad: grad * 0.5)
+            if model.learned_model:
+                hidden_state.register_hook(lambda grad: grad * 0.5)
 
             # reset hidden states
             if (step_i + 1) % config.lstm_horizon_len == 0:
@@ -331,10 +333,13 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     if torch.isnan(ube_loss).any() or torch.isinf(ube_loss).any():
         print(
             f"$$$$$$$$$$$$$$$$$$$$$\n There are nans in ube_loss. ube_loss = {ube_loss} \n $$$$$$$$$$$$$$$$$$$$$\n")
-    if 'rnd' in config.uncertainty_architecture_type:
-        loss += rnd_loss
-    if 'ube' in config.uncertainty_architecture_type:
-        loss += ube_loss * config.ube_loss_coeff
+
+    if rnd_optimizer is not None:
+        rnd_optimizer.zero_grad()
+        weighted_rnd_loss = (weights * (ube_loss * config.ube_loss_coeff + rnd_loss)).mean()
+        weighted_rnd_loss.backward()
+        rnd_optimizer.step()
+
     # Let's test for shapes of loss
     weighted_loss = (weights * loss).mean()
 
@@ -430,8 +435,18 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
     model = model.to(config.device)
     target_model = target_model.to(config.device)
 
-    optimizer = optim.SGD(model.parameters(), lr=config.lr_init, momentum=config.momentum,
-                          weight_decay=config.weight_decay)
+    if 'rnd' in config.uncertainty_architecture_type:
+        rnd_ube_params = [
+            {'params': model.rnd_parameters(), 'lr': 1E-02},
+            {'params': model.ube_network.parameters(), 'lr': 1E-03},
+        ]
+        rnd_optimizer = optim.Adam(rnd_ube_params)
+        optimizer = optim.SGD(model.other_parameters(), lr=config.lr_init, momentum=config.momentum,
+                              weight_decay=config.weight_decay)
+    else:
+        optimizer = optim.SGD(model.parameters(), lr=config.lr_init, momentum=config.momentum,
+                              weight_decay=config.weight_decay)
+        rnd_optimizer = None
 
     scaler = GradScaler()
 
@@ -508,10 +523,10 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
                 traceback.print_exc()
 
         if config.amp_type == 'torch_amp':
-            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count)
+            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count, rnd_optimizer)
             scaler = log_data[3]
         else:
-            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count)
+            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count, rnd_optimizer)
 
         if step_count % config.log_interval == 0:
             _log(config, step_count, log_data[0:3], model, replay_buffer, lr, shared_storage, summary_writer, vis_result)
@@ -684,7 +699,7 @@ def get_rnd_loss(model, state, batch_size, device, amp_type, action=None):
                     .to(action.device)
                     .float()
                 )
-                action_one_hot[action.long()] = 1
+                action_one_hot.scatter_(1, action.long(), 1.0)
                 flattened_state = state.reshape(-1, model.input_size_reward_rnd - model.action_space_size)
                 state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
                 local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),
@@ -708,7 +723,7 @@ def get_rnd_loss(model, state, batch_size, device, amp_type, action=None):
                 .to(action.device)
                 .float()
             )
-            action_one_hot[action.long()] = 1
+            action_one_hot.scatter_(1, action.long(), 1.0)
             flattened_state = state.reshape(-1, model.input_size_reward_rnd - model.action_space_size)
             state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
             local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),

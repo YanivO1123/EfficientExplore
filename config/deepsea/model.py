@@ -9,6 +9,7 @@ import torch.nn as nn
 from core.model import BaseNet, renormalize
 
 from config.deepsea.extended_deep_sea import DeepSea
+import itertools
 
 
 def mlp(
@@ -234,8 +235,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
         if 'ube' in uncertainty_type:
             self.ube_scale = ube_scale
-            self.ube_network = mlp(self.encoded_state_size, fc_ube_layers, 1,
-                                   init_zero=init_zero, momentum=momentum)
+            self.ube_network = no_batch_norm_mlp(self.encoded_state_size, fc_ube_layers, 1,
+                                   init_zero=init_zero)#, momentum=momentum)
 
     def representation(self, observation):
         # Regardless of the number of stacked observations, we only pass the last
@@ -324,7 +325,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             .to(action.device)
             .float()
         )
-        action_one_hot[action.long()] = 1
+        action_one_hot.scatter_(1, action.long(), 1.0)
         flattened_state = state.reshape(-1, self.input_size_reward_rnd - self.action_space_size)
         state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
         # Compute the RND uncertainty
@@ -356,6 +357,24 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                   f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n")
 
         return ube_prediction
+
+    def rnd_ube_parameters(self):
+        return itertools.chain(self.reward_rnd_network.parameters(), self.value_rnd_network.parameters(),
+                               self.ube_network.parameters())
+
+    def rnd_parameters(self):
+        return itertools.chain(self.reward_rnd_network.parameters(), self.value_rnd_network.parameters())
+
+    def other_parameters(self):
+        return itertools.chain(self.representation_network.parameters(),
+                               self.policy_network.parameters(),
+                               self.value_network.parameters(),
+                               self.dynamics_network.parameters(),
+                               self.projection.parameters(),
+                               self.projection_head.parameters(),
+                               # self.ube_network.parameters(),
+                               # self.reward_rnd_network.parameters(), self.value_rnd_network.parameters()
+                               )
 
     def ensemble_prediction_to_variance(self, logits):
         if not isinstance(logits, list):

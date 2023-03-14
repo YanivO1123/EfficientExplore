@@ -141,7 +141,7 @@ class DataWorker(object):
         max_transitions = self.config.total_transitions // self.config.num_actors
 
         # MuExplore: keep track of values and value uncertainties to debug beta
-        value_max, value_unc_max, value_min, value_unc_min, value_sum, value_unc_sum = -math.inf, -math.inf, math.inf, math.inf, 0, 0
+        value_max, value_unc_max, value_min, value_unc_min, value_sum, value_unc_sum, value_unc_count = -math.inf, -math.inf, math.inf, math.inf, 0, 0, 0
         # To alternate random action selection or det. action selection in deep_sea
         deterministic_deep_sea = False
         # We change action selection in deepsea from random to det. every N = 1 batched episodes
@@ -440,36 +440,38 @@ class DataWorker(object):
                                           f"$$$$$$$$$$$$$$$$ \n"
                                           , flush=True)
 
-                            if total_transitions % self.config.test_interval == 0:
-                                try:
-                                    # os.system("nvidia-smi")
-                                    if self.config.mu_explore and total_transitions > 0:
-                                        root_values_uncertainties = roots.get_values_uncertainty()
-                                        value_max = max(value_max, np.max(roots_values))
-                                        value_min = min(value_min, np.min(roots_values))
-                                        value_sum += sum(roots_values)
-                                        value_unc_max = max(value_unc_max, np.max(root_values_uncertainties[exploit_env_nums:]))
-                                        value_unc_min = min(value_unc_min, np.min(root_values_uncertainties[exploit_env_nums:]))
-                                        value_unc_sum += sum(root_values_uncertainties[exploit_env_nums:])
+                            try:
+                                if total_transitions % self.config.test_interval == 0:
+                                    if self.config.use_visitation_counter:
+                                        print(
+                                            f"Printing the state-action visitation counter at the last row, at transition number {total_transitions}: \n"
+                                            f"{self.visitation_counter.sa_counts[-1, :, :]} \n"
+                                            # f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
+                                            f"Printing the state visitation counter: \n"
+                                            f"{self.visitation_counter.s_counts}"
+                                            , flush=True)
+                                if self.config.mu_explore and total_transitions > 0:
+                                    root_values_uncertainties = roots.get_values_uncertainty()
+                                    value_max = max(value_max, np.max(roots_values))
+                                    value_min = min(value_min, np.min(roots_values))
+                                    value_sum += sum(roots_values)
+                                    value_unc_max = max(value_unc_max, np.max(root_values_uncertainties[exploit_env_nums:]))
+                                    value_unc_min = min(value_unc_min, np.min(root_values_uncertainties[exploit_env_nums:]))
+                                    value_unc_sum += sum(root_values_uncertainties[exploit_env_nums:])
+                                    value_unc_count += len(root_values_uncertainties[exploit_env_nums:])
+                                    if total_transitions % self.config.test_interval == 0:
                                         print(
                                             f"Printing root-values and root-values-uncertainties statistics at transition number "
                                             f"{total_transitions}: \n"
                                             f"values: max = {value_max}, min: {value_min}, mean: "
                                             f"{value_sum / total_transitions} \n"
                                             f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
-                                            f"{value_unc_sum / (total_transitions * self.config.number_of_exploratory_envs / self.config.p_mcts_num)} \n"
+                                            f"{value_unc_sum / value_unc_count} \n"
                                             , flush=True)
-                                    if self.config.use_visitation_counter:
-                                        print(f"Printing the state-action visitation counter at the last row, at transition number {total_transitions}: \n"
-                                              f"{self.visitation_counter.sa_counts[-1, :, :]} \n"
-                                              # f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
-                                              f"Printing the state visitation counter: \n"
-                                              f"{self.visitation_counter.s_counts}"
-                                              , flush=True)
-                                    if 'deep_sea/0' in self.config.env_name:
-                                        self.debug_deep_sea(model)
-                                except:
-                                    traceback.print_exc()
+                                        if 'deep_sea/0' in self.config.env_name:
+                                            self.debug_deep_sea(model)
+                            except:
+                                traceback.print_exc()
 
                             # clip the reward
                             if self.config.clip_reward:
