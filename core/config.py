@@ -91,6 +91,8 @@ class BaseConfig(object):
                  count_based_ube: bool = False,
                  num_simulations_ube: int = 30,
                  reset_ube_interval: int = 1000 * 5,
+                 rnd_scale: float = 1.0,
+                 ube_scale: float = 1.0,
                  # loss_uncertainty_weighting: bool = False,
                  ):
         """Base Config for EfficietnZero
@@ -260,6 +262,10 @@ class BaseConfig(object):
             When step_count % config.reset_ube_interval == 0 reset the network parameters of UBE, to prevent
             failure to adapt to new uncertainty scores.
             If reset_ube_interval <= 0, don't reset ube weights.
+        rnd_scale: float
+            In compute_rnd_uncertainty functions, scales the MSE error as a measure of uncertainty.
+        ube_scale: float
+            For stability, scales the output of UBE such that the NN weights do not have to be large.
         """
         # Self-Play
         self.action_space_size = None
@@ -366,7 +372,7 @@ class BaseConfig(object):
         self.prior_scale = prior_scale
 
         # rnd
-        self.rnd_scale = 0.5  # 2
+        self.rnd_scale = rnd_scale
 
         # exploration
         self.use_deep_exploration = False       # Activated in set_config if mu_explore or ube
@@ -401,6 +407,7 @@ class BaseConfig(object):
         self.num_simulations_ube = num_simulations_ube
         self.reset_ube_interval = reset_ube_interval
         self.periodic_ube_weight_reset = False
+        self.ube_scale = ube_scale
 
         # Deep sea for debugging
         self.deepsea_randomize_actions = True

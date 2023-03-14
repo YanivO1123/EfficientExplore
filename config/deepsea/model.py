@@ -119,6 +119,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  ensemble_size=5,
                  use_prior=True,
                  prior_scale=10,
+                 ube_scale=10,
                  ):
         """
             FullyConnected (more precisely non-resnet) EfficientZero network.
@@ -232,7 +233,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             self.value_rnd_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
 
         if 'ube' in uncertainty_type:
-            self.use_ube = True
+            self.ube_scale = ube_scale
             self.ube_network = mlp(self.encoded_state_size, fc_ube_layers, 1,
                                    init_zero=init_zero, momentum=momentum)
 
@@ -339,7 +340,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         """
         state = state.reshape(-1, self.encoded_state_size).detach()
         # We squeeze the result to return tensor of shape [B] instead of [B, 1]
-        return self.ube_network(state).squeeze()
+        return self.ube_scale * self.ube_network(state).squeeze()
 
     def ensemble_prediction_to_variance(self, logits):
         if not isinstance(logits, list):

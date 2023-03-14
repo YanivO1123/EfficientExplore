@@ -166,14 +166,19 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     # value RND loss:
     if (config.uncertainty_architecture_type == 'rnd' or config.uncertainty_architecture_type == 'rnd_ube') \
             and config.use_uncertainty_architecture:
-        rnd_loss = model.compute_value_rnd_uncertainty(hidden_state.detach())
+        rnd_loss = get_rnd_loss(model, hidden_state, batch_size, config.device, config.amp_type)
     else:
         rnd_loss = torch.zeros(batch_size)
 
     # UBE loss
     if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
-        ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
-        ube_loss = config.ube_loss(ube_prediction, target_ube[:, 0])
+        if config.amp_type == 'torch_amp':
+            with autocast():
+                ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
+                ube_loss = config.ube_loss(ube_prediction, target_ube[:, 0])
+        else:
+            ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
+            ube_loss = config.ube_loss(ube_prediction, target_ube[:, 0])
     else:
         ube_loss = torch.zeros(batch_size)
 
@@ -203,12 +208,10 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     consistency_loss += temp_loss
 
                 if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
-                    # Compute value RND loss
-                    rnd_loss += model.compute_value_rnd_uncertainty(hidden_state.detach()) * mask_batch[:, step_i]
-
-                    # Compute reward RND loss
                     action = action_batch[:, step_i]
-                    rnd_loss += model.compute_reward_rnd_uncertainty(hidden_state.detach(), action) * mask_batch[:, step_i]
+                    # Compute value RND loss
+                    rnd_loss += get_rnd_loss(model, hidden_state, batch_size, config.device, config.amp_type, action) \
+                                * mask_batch[:, step_i]
 
                 if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                     ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
@@ -271,12 +274,10 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 consistency_loss += temp_loss
 
             if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
-                # Compute value RND loss
-                rnd_loss += model.compute_value_rnd_uncertainty(hidden_state.detach()) * mask_batch[:, step_i]
-
-                # Compute reward RND loss
                 action = action_batch[:, step_i]
-                rnd_loss += model.compute_reward_rnd_uncertainty(hidden_state.detach(), action) * mask_batch[:, step_i]
+                # Compute value RND loss
+                rnd_loss += get_rnd_loss(model, hidden_state, batch_size, config.device, config.amp_type, action) \
+                            * mask_batch[:, step_i]
 
             if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                 ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
@@ -321,10 +322,13 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     # weighted loss with masks (some invalid states which are out of trajectory.)
     loss = (config.consistency_coeff * consistency_loss + config.policy_loss_coeff * policy_loss +
             config.value_loss_coeff * value_loss + config.reward_loss_coeff * value_prefix_loss)
-    if torch.isnan(rnd_loss).any():
+    if torch.isnan(loss).any() or torch.isinf(loss).any():
         print(
-            f"$$$$$$$$$$$$$$$$$$$$$\n There are nans in rnd_loss. rnd_loss = {rnd_loss} \n $$$$$$$$$$$$$$$$$$$$$\n")
-    if torch.isnan(rnd_loss).any():
+            f"$$$$$$$$$$$$$$$$$$$$$\n There are nans / infs in original loss. loss = {loss} \n $$$$$$$$$$$$$$$$$$$$$\n")
+    if torch.isnan(rnd_loss).any() or torch.isinf(rnd_loss).any():
+        print(
+            f"$$$$$$$$$$$$$$$$$$$$$\n There are nans / infs in rnd_loss. rnd_loss = {rnd_loss} \n $$$$$$$$$$$$$$$$$$$$$\n")
+    if torch.isnan(ube_loss).any() or torch.isinf(ube_loss).any():
         print(
             f"$$$$$$$$$$$$$$$$$$$$$\n There are nans in ube_loss. ube_loss = {ube_loss} \n $$$$$$$$$$$$$$$$$$$$$\n")
     if 'rnd' in config.uncertainty_architecture_type:
@@ -642,3 +646,60 @@ def debug_train_deep_sea(observations_batch, values_targets_batch, policy_target
               f" policy target: {policy_targets_batch[i, j]}, "
               f"ube_target: {ube_targets_batch[i, j] if ube_targets_batch is not None else None}, "
               f"action: {action_batch[i, j - 1] if j > 0 else 1}")
+
+
+def get_rnd_loss(model, state, batch_size, device, amp_type, action=None):
+    local_loss = torch.zeros(batch_size, device=device)
+    if amp_type == 'torch_amp':
+        with autocast():
+            # Compute value_rnd loss
+            state_for_rnd = state.reshape(-1, model.input_size_value_rnd).detach()
+            local_loss += torch.nn.functional.mse_loss(model.value_rnd_network(state_for_rnd),
+                                                       model.value_rnd_target_network(state_for_rnd).detach(),
+                                                       reduction='none').sum(dim=-1)
+
+            if action is not None:
+                # Compute reward_rnd loss
+                action_one_hot = (
+                    torch.zeros(
+                        (
+                            state.shape[0],  # batch dimension
+                            model.action_space_size
+                        )
+                    )
+                    .to(action.device)
+                    .float()
+                )
+                action_one_hot[action.long()] = 1
+                flattened_state = state.reshape(-1, model.input_size_reward_rnd - model.action_space_size)
+                state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
+                local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),
+                                                           model.reward_rnd_target_network(state_action).detach(),
+                                                           reduction='none').sum(dim=-1)
+    else:
+        # Compute value_rnd loss
+        state_for_rnd = state.reshape(-1, model.input_size_value_rnd).detach()
+        local_loss += torch.nn.functional.mse_loss(model.value_rnd_network(state_for_rnd),
+                                                   model.value_rnd_target_network(state_for_rnd).detach(),
+                                                   reduction='none').sum(dim=-1)
+
+        if action is not None:
+            # Compute reward_rnd loss
+            action_one_hot = (
+                torch.zeros(
+                    (
+                        state.shape[0],  # batch dimension
+                        model.action_space_size
+                    )
+                )
+                .to(action.device)
+                .float()
+            )
+            action_one_hot[action.long()] = 1
+            flattened_state = state.reshape(-1, model.input_size_reward_rnd - model.action_space_size)
+            state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
+            local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),
+                                                       model.reward_rnd_target_network(state_action).detach(),
+                                                       reduction='none').sum(dim=-1)
+
+    return local_loss

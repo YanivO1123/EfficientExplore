@@ -47,7 +47,7 @@ class DeepSeaConfig(BaseConfig):
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=2000,   # 500 400 32 5000 1000
+            start_transitions=1000,   # 500 400 32 5000 1000
             total_transitions=50 * 1000,
             transition_num=1,
             do_consistency=False,
@@ -85,6 +85,8 @@ class DeepSeaConfig(BaseConfig):
             training_ratio=1,
             # UBE params
             reset_ube_interval=500,
+            rnd_scale=0.2,
+            ube_scale=10,
         )
         self.start_transitions = max(1, self.start_transitions)
 
