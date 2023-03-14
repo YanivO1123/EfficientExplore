@@ -340,7 +340,22 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         """
         state = state.reshape(-1, self.encoded_state_size).detach()
         # We squeeze the result to return tensor of shape [B] instead of [B, 1]
-        return self.ube_scale * self.ube_network(state).squeeze()
+        ube_prediction = self.ube_network(state).squeeze()
+
+        if torch.isinf(ube_prediction).any() or torch.isnan(ube_prediction).any():
+            print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n"
+                  f"Inf (/nan) in UBE prediction! \n"
+                  f"ube_prediction = {ube_prediction} \n"
+                  f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n")
+        # To guarantee that output value is positive, we treat it as a logit instead of as a direct scalar
+        ube_prediction = torch.exp(ube_prediction)
+        if torch.isinf(ube_prediction).any() or torch.isnan(ube_prediction).any():
+            print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n"
+                  f"Inf (/nan) in UBE prediction! \n"
+                  f"ube_prediction = {ube_prediction} \n"
+                  f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n")
+
+        return ube_prediction
 
     def ensemble_prediction_to_variance(self, logits):
         if not isinstance(logits, list):

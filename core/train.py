@@ -475,8 +475,10 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
         if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval == 0 \
                 and 'ube' in config.uncertainty_architecture_type:
             model.ube_network.apply(fn=weight_reset)
-
-        # TODO: Periodically reset value and policy network weights
+            print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+                  f"UBE network weights have been reset! \n"
+                  f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+                  , flush=True)
 
         # update model for self-play
         if step_count % config.checkpoint_interval == 0:
