@@ -45,8 +45,6 @@ class BatchWorker_CPU(object):
         self.batch_max_num = 20
         self.beta_schedule = LinearSchedule(config.training_steps + config.last_steps, initial_p=config.priority_prob_beta, final_p=1.0)
 
-    # TODO: Complete the UBE context preparation - if it's even necessary, because I might want to rely on
-    #  reward-value-context
     def _prepare_ube_context(self, indices, games, state_index_lst, total_transitions):
         """
         prepare the context of UBE targets for reanalyze.
@@ -114,6 +112,8 @@ class BatchWorker_CPU(object):
                     ube_mask.append(0)
                     obs = zero_obs
 
+                ube_obs_lst.append(obs)
+
                 # Prepare the observations for reward_uncertainty prediction for UBE target:
                 for i in range(td_steps):
                     if current_index + i < traj_len:
@@ -121,17 +121,15 @@ class BatchWorker_CPU(object):
                         # the n-step UBE target is: current_index - state_index + i
                         beg_index = current_index - state_index + i
                         end_index = beg_index + config.stacked_observations
-                        obs = game_obs[beg_index:end_index]
-                        rewards_uncertainty_obs_lst.append(obs)
+                        reward_obs = game_obs[beg_index:end_index]
+                        rewards_uncertainty_obs_lst.append(reward_obs)
                         rewards_uncertainty_mask.append(1)
                         actions.append(game.actions[beg_index])
                     else:
-                        obs = zero_obs
-                        rewards_uncertainty_obs_lst.append(obs)
+                        reward_obs = zero_obs
+                        rewards_uncertainty_obs_lst.append(reward_obs)
                         rewards_uncertainty_mask.append(0)
                         actions.append(0)
-
-                ube_obs_lst.append(obs)
 
         ube_obs_lst = ray.put(ube_obs_lst)
         rewards_uncertainty_obs_lst = ray.put(rewards_uncertainty_obs_lst)
@@ -432,11 +430,8 @@ class BatchWorker_CPU(object):
                 time.sleep(1)
                 continue
 
-            # Based on the recommendation in issue https://github.com/YeWR/EfficientZero/issues/26
-            # ray_data_lst = [self.storage.get_counter.remote(), self.storage.get_target_weights.remote()]
-            # trained_steps, target_weights = ray.get(ray_data_lst)
-            trained_steps = ray.get(self.storage.get_counter.remote())
-            target_weights = None
+            ray_data_lst = [self.storage.get_counter.remote(), self.storage.get_target_weights.remote()]
+            trained_steps, target_weights = ray.get(ray_data_lst)
 
             beta = self.beta_schedule.value(trained_steps)
             # obtain the batch context from replay buffer
@@ -445,13 +440,6 @@ class BatchWorker_CPU(object):
             if trained_steps >= self.config.training_steps + self.config.last_steps:
                 time.sleep(30)
                 break
-
-            new_model_index = trained_steps // self.config.target_model_interval
-            if new_model_index > self.last_model_index:
-                self.last_model_index = new_model_index
-                target_weights = ray.get(self.storage.get_target_weights.remote())
-            else:
-                target_weights = None
 
             if self.mcts_storage.get_len() < 20:
                 # Observation will be deleted if replay buffer is full. (They are stored in the ray object store)

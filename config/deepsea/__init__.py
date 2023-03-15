@@ -84,7 +84,8 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            reset_ube_interval=500,
+            ube_td_steps=5,
+            reset_ube_interval=1000,
             rnd_scale=1,
             ube_scale=1,
         )
@@ -182,10 +183,10 @@ class DeepSeaConfig(BaseConfig):
         )
         for p in model.value_rnd_target_network.parameters():
             with torch.no_grad():
-                p *= 3
+                p *= 4
         for p in model.reward_rnd_target_network.parameters():
             with torch.no_grad():
-                p *= 3
+                p *= 4
         return model
 
     def new_game(self, seed=None, save_video=False, save_path=None, video_callable=None, uid=None, test=False,
