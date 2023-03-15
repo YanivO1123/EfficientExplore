@@ -549,7 +549,7 @@ class BaseConfig(object):
             # In deep sea w. MuExplore we want to update weights often in selfplay, to make the most of exploration
             # As a result, we compute checkpoint_interval as once every batched episode
             training_steps_per_episode_ratio = self.training_ratio * self.p_mcts_num * self.env_size
-            self.checkpoint_interval = min(self.checkpoint_interval, int(0.5 * training_steps_per_episode_ratio))
+            self.checkpoint_interval = min(self.checkpoint_interval, 10)
             # We compute target_model_interval as once every M batched episodes.
             M = 1
             self.target_model_interval = min(self.target_model_interval, 10)

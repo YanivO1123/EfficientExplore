@@ -27,8 +27,8 @@ class MCTS(object):
         acting: bool
             Distinguishes between acting in the environment (True) and training (False)
         propagating_uncertainty: bool
-            If true, instead of running standard MuZero MCTS with reward and value and discount, runs MuZero MCTS with
-            reward_uncertainty, value_uncertainty, and discount ** 2
+            If true, instead of running MCTS with rewards and values, runs MCTS with
+            reward_uncertainty and value_uncertainty (and discount ** 2 instead of discount)
         """
         with torch.no_grad():
             model.eval()
@@ -36,7 +36,7 @@ class MCTS(object):
             num = roots.num
             num_exploratory = self.config.number_of_exploratory_envs
             device = self.config.device
-            pb_c_base, pb_c_init, discount = self.config.pb_c_base, self.config.pb_c_init, self.config.discount
+            pb_c_base, pb_c_init, discount = self.config.pb_c_base, self.config.pb_c_init, 1 #self.config.discount
             # the data storage of hidden states: storing the states of all the tree nodes
             hidden_state_pool = [hidden_state_roots]
             # 1 x batch x 64
@@ -122,6 +122,10 @@ class MCTS(object):
                 elif self.config.mu_explore and self.config.use_uncertainty_architecture and propagating_uncertainty \
                         and not acting:
                     assert value_prefix_variance_pool is not None and value_variance_pool is not None
+                    # When we call MCTS from reanalyze to make UBE targets, we are not interested in the value
+                    # uncertainty of the tree following the policy, but rather, the max
+                    len_logits = len(policy_logits_pool[0])
+                    policy_logits_pool = [[1.0] * len_logits for _ in range(len(policy_logits_pool))]
                     # backpropagation along the search path to update the attributes
                     tree.batch_back_propagate(hidden_state_index_x, discount ** 2,
                                               value_prefix_variance_pool, value_variance_pool, policy_logits_pool,

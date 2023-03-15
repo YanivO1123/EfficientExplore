@@ -198,8 +198,11 @@ class BaseNet(nn.Module):
         # Case UBE with either. The prediction of UBE is not detached, only the input.
         if 'ube' in self.uncertainty_type:
             # We add the UBE uncertainty to the current value_variance. We squeeze ube_unc to return prediction of shape
-            # [batch_size] not in training, but prediction of shape [batch_size, 1] in training
-            value_variance = value_variance + self.compute_ube_uncertainty(next_state.detach())
+            # [batch_size]. In addition, we compute the value uncertainty as the sum of ube prediction (high on known
+            # states) and value_rnd_prediction (high on unknown states)
+            value_variance = self.value_rnd_propagation_scale * value_variance + \
+                             self.compute_ube_uncertainty(next_state.detach())
+
 
         return value_variance, value_prefix_variance
 

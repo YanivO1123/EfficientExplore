@@ -197,22 +197,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         num_channels = 1
         in_dim = num_channels * observation_shape[1] * observation_shape[2]
         self.porjection_in_dim = in_dim
-        self.projection = nn.Sequential(
-            nn.Linear(self.porjection_in_dim, self.proj_hid),
-            nn.BatchNorm1d(self.proj_hid),
-            nn.ReLU(),
-            nn.Linear(self.proj_hid, self.proj_hid),
-            nn.BatchNorm1d(self.proj_hid),
-            nn.ReLU(),
-            nn.Linear(self.proj_hid, self.proj_out),
-            nn.BatchNorm1d(self.proj_out)
-        )
-        self.projection_head = nn.Sequential(
-            nn.Linear(self.proj_out, self.pred_hid),
-            nn.BatchNorm1d(self.pred_hid),
-            nn.ReLU(),
-            nn.Linear(self.pred_hid, self.pred_out),
-        )
+        self.projection = torch.nn.Identity()
+        self.projection_head = torch.nn.Identity()
 
         # RND
         if 'rnd' in uncertainty_type:
@@ -342,20 +328,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         state = state.reshape(-1, self.encoded_state_size).detach()
         # We squeeze the result to return tensor of shape [B] instead of [B, 1]
         ube_prediction = self.ube_network(state).squeeze()
-
-        if torch.isinf(ube_prediction).any() or torch.isnan(ube_prediction).any():
-            print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n"
-                  f"Inf (/nan) in UBE prediction! \n"
-                  f"ube_prediction = {ube_prediction} \n"
-                  f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n")
         # To guarantee that output value is positive, we treat it as a logit instead of as a direct scalar
         ube_prediction = torch.exp(ube_prediction)
-        if torch.isinf(ube_prediction).any() or torch.isnan(ube_prediction).any():
-            print(f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n"
-                  f"Inf (/nan) in UBE prediction! \n"
-                  f"ube_prediction = {ube_prediction} \n"
-                  f"&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n")
-
         return ube_prediction
 
     def rnd_ube_parameters(self):

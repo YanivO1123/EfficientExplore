@@ -394,6 +394,9 @@ class DataWorker(object):
                                      )
                                     ):
                                 deterministic = True
+                            # Always det. in exploration.
+                            elif start_training and 'deep_sea' in self.config.env_name and i >= exploit_env_nums:
+                                deterministic = True
                             elif start_training and 'deep_sea' in self.config.env_name \
                                     and total_transitions % flip_deep_sea_action_selection == 0:
                                 deterministic_deep_sea = not deterministic_deep_sea

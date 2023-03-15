@@ -47,7 +47,7 @@ class DeepSeaConfig(BaseConfig):
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=1000,   # 500 400 32 5000 1000
+            start_transitions=64,   # 500 400 32 5000 1000
             total_transitions=50 * 1000,
             transition_num=1,
             do_consistency=False,
@@ -73,7 +73,7 @@ class DeepSeaConfig(BaseConfig):
             # MuExplore
             # Architecture
             ensemble_size=3,
-            use_prior=True,
+            use_prior=False,
             prior_scale=10.0,
             # visitation counter
             use_visitation_counter=False,

@@ -46,7 +46,7 @@ def adjust_lr(config, optimizer, step_count):
 
 
 def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result=False, step_count=None,
-                   rnd_optimizer=None):
+                   rnd_optimizer=None, rnd_scaler=None):
     """update models given a batch data
     Parameters
     ----------
@@ -339,8 +339,15 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     if rnd_optimizer is not None:
         rnd_optimizer.zero_grad()
         weighted_rnd_loss = (weights * (ube_loss * config.ube_loss_coeff + rnd_loss)).mean()
-        weighted_rnd_loss.backward()
-        rnd_optimizer.step()
+        if config.amp_type == 'none':
+            weighted_rnd_loss.backward()
+            rnd_optimizer.step()
+        elif config.amp_type == 'torch_amp':
+            rnd_scaler.scale(weighted_rnd_loss).backward()
+            rnd_scaler.unscale_(rnd_optimizer)
+            torch.nn.utils.clip_grad_norm_(model.rnd_ube_parameters(), config.max_grad_norm)
+            rnd_scaler.step(rnd_optimizer)
+            rnd_scaler.update()
 
     # Let's test for shapes of loss
     weighted_loss = (weights * loss).mean()
@@ -443,6 +450,7 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             {'params': model.ube_network.parameters(), 'lr': 1E-03},
         ]
         rnd_optimizer = optim.Adam(rnd_ube_params)
+        rnd_scaler = GradScaler()
         optimizer = optim.SGD(model.other_parameters(), lr=config.lr_init, momentum=config.momentum,
                               weight_decay=config.weight_decay)
     else:
@@ -517,7 +525,7 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             vis_result = False
 
         # To debug uncertainty
-        if 'deep_sea' in config.env_name and False:
+        if 'deep_sea' in config.env_name and True:
             try:
                 debug_uncertainty(model=model, config=config, training_step=step_count, device=config.device,
                                   visit_counter=visit_counter, batch=batch)
@@ -526,10 +534,12 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             model.train()
 
         if config.amp_type == 'torch_amp':
-            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count, rnd_optimizer)
+            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count,
+                                      rnd_optimizer, rnd_scaler)
             scaler = log_data[3]
         else:
-            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count, rnd_optimizer)
+            log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count,
+                                      rnd_optimizer, rnd_scaler)
 
         if step_count % config.log_interval == 0:
             _log(config, step_count, log_data[0:3], model, replay_buffer, lr, shared_storage, summary_writer, vis_result)
@@ -688,55 +698,30 @@ def get_rnd_loss(model, next_state, batch_size, device, amp_type, previous_state
         This is the reason both previous state and next state are passed to this function.
     """
     local_loss = torch.zeros(batch_size, device=device)
-    if amp_type == 'torch_amp':
-        with autocast():
-            # Compute value_rnd loss
-            state_for_rnd = next_state.reshape(-1, model.input_size_value_rnd).detach()
-            local_loss += torch.nn.functional.mse_loss(model.value_rnd_network(state_for_rnd),
-                                                       model.value_rnd_target_network(state_for_rnd).detach(),
-                                                       reduction='none').sum(dim=-1)
-            # Compute reward_rnd loss
-            if action is not None and previous_state is not None:
-                action_one_hot = (
-                    torch.zeros(
-                        (
-                            previous_state.shape[0],  # batch dimension
-                            model.action_space_size
-                        )
-                    )
-                    .to(action.device)
-                    .float()
+
+    # Compute value_rnd loss
+    state_for_rnd = next_state.reshape(-1, model.input_size_value_rnd).detach()
+    local_loss += torch.nn.functional.mse_loss(model.value_rnd_network(state_for_rnd),
+                                               model.value_rnd_target_network(state_for_rnd).detach(),
+                                               reduction='none').sum(dim=-1)
+    # Compute reward_rnd loss
+    if action is not None and previous_state is not None:
+        action_one_hot = (
+            torch.zeros(
+                (
+                    previous_state.shape[0],  # batch dimension
+                    model.action_space_size
                 )
-                action_one_hot.scatter_(1, action.long(), 1.0)
-                flattened_state = previous_state.reshape(-1, model.input_size_reward_rnd - model.action_space_size)
-                state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
-                local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),
-                                                           model.reward_rnd_target_network(state_action).detach(),
-                                                           reduction='none').sum(dim=-1)
-    else:
-        # Compute value_rnd loss
-        state_for_rnd = next_state.reshape(-1, model.input_size_value_rnd).detach()
-        local_loss += torch.nn.functional.mse_loss(model.value_rnd_network(state_for_rnd),
-                                                   model.value_rnd_target_network(state_for_rnd).detach(),
-                                                   reduction='none').sum(dim=-1)
-        # Compute reward_rnd loss
-        if action is not None and previous_state is not None:
-            action_one_hot = (
-                torch.zeros(
-                    (
-                        previous_state.shape[0],  # batch dimension
-                        model.action_space_size
-                    )
-                )
-                .to(action.device)
-                .float()
             )
-            action_one_hot.scatter_(1, action.long(), 1.0)
-            flattened_state = previous_state.reshape(-1, model.input_size_reward_rnd - model.action_space_size)
-            state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
-            local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),
-                                                       model.reward_rnd_target_network(state_action).detach(),
-                                                       reduction='none').sum(dim=-1)
+            .to(action.device)
+            .float()
+        )
+        action_one_hot.scatter_(1, action.long(), 1.0)
+        flattened_state = previous_state.reshape(-1, model.input_size_reward_rnd - model.action_space_size)
+        state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
+        local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),
+                                                   model.reward_rnd_target_network(state_action).detach(),
+                                                   reduction='none').sum(dim=-1)
     return local_loss
 
 
@@ -882,10 +867,10 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
             print(f"Printing state counts: \n"
                   f"{visit_counter.s_counts}"
                   , flush=True)
-            print(f"Value RND scores for states: \n"
-                  f"{row_value_rnds}", flush=True)
-            # print(f"UBE + RND scores for states: \n"
-            #       f"{final_value_uncertainty_prediction}", flush=True)
+            # print(f"Value RND scores for states: \n"
+            #       f"{row_value_rnds}", flush=True)
+            print(f"UBE + RND scores for states: \n"
+                  f"{final_value_uncertainty_prediction}", flush=True)
             # print(f"UBE scores for states: \n{row_ube_predictions}", flush=True)
             print(f"The targets for UBE at THIS SPECIFIC time step: \n{target_ube}", flush=True)
             # print(f"Now printing state-action \n "
@@ -893,9 +878,8 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
             #       f"{visit_counter.sa_counts}"
             #       , flush=True)
             # print(f"Reward uncertainty for action 0: \n{row_reward_rnds_left}", flush=True)
-            # print(f"Reward uncertainty for action 1:", flush=True)
-            # print(row_reward_rnds_right)
-            print(f"recurrent_inf_reward_unc_prediction_left: \n{recurrent_inf_reward_unc_prediction_left}", flush=True)
+            # print(f"Reward uncertainty for action 1: \n{row_reward_rnds_right}", flush=True)
+            # print(f"recurrent_inf_reward_unc_prediction_left: \n{recurrent_inf_reward_unc_prediction_left}", flush=True)
             # print(f"recurrent_inf_reward_unc_prediction_right: \n{recurrent_inf_reward_unc_prediction_right} ", flush=True)
             # print(f"Finally, let's do one more prediction for the zeros-state")
             # stack_obs = torch.zeros(size=(2, 1, num_rows, num_columns,)).to(device).float()
