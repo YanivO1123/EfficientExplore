@@ -189,7 +189,7 @@ class BaseNet(nn.Module):
             if action is not None:
                 # Compute reward-unc. as epistemic unc. associated with NEXT state as well as transition
                 # (previous state + action)
-                value_prefix_variance = value_variance + 0.1 * self.compute_reward_rnd_uncertainty(previous_state.detach(),
+                value_prefix_variance = value_variance + self.compute_reward_rnd_uncertainty(previous_state.detach(),
                                                                         action.detach()).detach()
 
             # The below will give more weight to rnd_value_unc in the MCTS tree, for recognition of new states

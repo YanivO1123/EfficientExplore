@@ -629,8 +629,11 @@ class BatchWorker_GPU(object):
                     # TODO: Do I really want to create NOISY roots as targets?
                     roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_variance_pool, policy_logits_pool)
                     MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots, propagating_uncertainty=True)
-                    roots_values = roots.get_values()
-                    ube_lst = np.array(roots_values)
+                    # We have propagated only uncertainty through this tree, so the uncertainty information is in the
+                    # node values.
+                    children_of_root_value_uncertainties = np.asarray(roots.get_roots_children_values(self.config.discount))
+                    max_child_uncertainty = children_of_root_value_uncertainties.max(axis=-1)
+                    ube_lst = np.array(max_child_uncertainty)
                 else:
                     # use the nn-predicted ube_uncertainties
                     ube_lst = concat_output_value_variance(network_output_ube)

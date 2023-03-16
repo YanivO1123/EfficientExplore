@@ -25,11 +25,11 @@ class DeepSeaConfig(BaseConfig):
             max_moves=10,   # Max moves are re-set in set_game to env_size
             test_max_moves=10,  # test_max_moves are re-set in set_game to env_size
             history_length=10,  # history_length is re-set in set_game to env_size
-            discount=0.98,     # Might want lower
+            discount=0.995,     # 0.98, 0.997
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
-            batch_size=32,  # 32 # 64 #256,  # TODO: can be larger with smaller net
+            batch_size=64,  # 32 # 64 #256,  # TODO: can be larger with smaller net
             td_steps=5,     # 5, 10, 3, 1
             num_actors=1,
             # network initialization/ & normalization
@@ -84,8 +84,8 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            ube_td_steps=5,
-            reset_ube_interval=1000,
+            ube_td_steps=1,
+            reset_ube_interval=2000,
             rnd_scale=1,
             ube_scale=1,
         )

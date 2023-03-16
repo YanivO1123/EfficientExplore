@@ -527,7 +527,6 @@ class BaseConfig(object):
 
         # Setup cluster specific config
         if args.cluster:
-            self.batch_size = 256
             self.ensemble_size = 5
             self.start_transitions = max(self.start_transitions, self.batch_size)
             if args.case == 'deep_sea':
@@ -537,6 +536,7 @@ class BaseConfig(object):
                 # self.pred_hid = 512
                 # self.pred_out = 1024
             if args.case == 'atari':
+                self.batch_size = 256
                 # Base network arch.
                 self.lstm_hidden_size = 512
                 self.proj_hid = 1024
@@ -549,12 +549,12 @@ class BaseConfig(object):
             # In deep sea w. MuExplore we want to update weights often in selfplay, to make the most of exploration
             # As a result, we compute checkpoint_interval as once every batched episode
             training_steps_per_episode_ratio = self.training_ratio * self.p_mcts_num * self.env_size
-            self.checkpoint_interval = min(self.checkpoint_interval, 10)
+            self.checkpoint_interval = min(self.checkpoint_interval, 5)
             # We compute target_model_interval as once every M batched episodes.
             M = 1
             self.target_model_interval = min(self.target_model_interval, 10)
             # Reset ube every N batched episodes
-            N = 30
+            N = 50
             self.reset_ube_interval = min(self.reset_ube_interval, N * training_steps_per_episode_ratio)
             self.use_visitation_counter = args.visit_counter
             # only use visit_counter in planning when it's enabled
