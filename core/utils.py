@@ -16,6 +16,11 @@ from scipy.stats import entropy
 from torch import nn
 
 
+from torch.nn.init import (_calculate_correct_fan, _no_grad_fill_,
+                           _no_grad_trunc_normal_, calculate_gain)
+
+
+
 class LinearSchedule(object):
     def __init__(self, schedule_timesteps, final_p, initial_p=1.0):
         """Linear interpolation between initial_p and final_p over
@@ -426,3 +431,68 @@ def weight_reset(m: nn.Module):
     reset_parameters = getattr(m, "reset_parameters", None)
     if callable(reset_parameters):
         m.reset_parameters()
+
+
+def kaiming_truncnormal_(
+        tensor: torch.Tensor,
+        a: float = 0,
+        mode: str = 'fan_in',
+        nonlinearity: str = 'relu',
+        trunc_l: float = -2.,
+        trunc_u: float = 2.,
+        gain=None
+):
+    r"""Fills the input `Tensor` with values according to the method
+    described in `Delving deep into rectifiers: Surpassing human-level
+    performance on ImageNet classification` - He, K. et al. (2015), using a
+    normal distribution. The resulting tensor will have values sampled from
+    a truncated :math:`\mathcal{N}(0, \text{std}^2)` where
+
+    .. math::
+        \text{std} = \frac{\text{gain}}{\sqrt{\text{fan\_mode}}}
+
+    Also known as He initialization.
+
+    Args:
+        tensor: an n-dimensional `torch.Tensor`
+        a: the negative slope of the rectifier used after this layer (only
+            used with ``'leaky_relu'``)
+        mode: either ``'fan_in'`` (default) or ``'fan_out'``. Choosing ``'fan_in'``
+            preserves the magnitude of the variance of the weights in the
+            forward pass. Choosing ``'fan_out'`` preserves the magnitudes in the
+            backwards pass.
+        nonlinearity: the non-linear function (`nn.functional` name),
+            recommended to use only with ``'relu'`` or ``'leaky_relu'`` (default).
+        trunc_l: lower truncation
+        trunc_u: upper truncation
+        gain: None: uses the pytorch gain computation based on nonlinearity,
+              float: uses specified float as gain. If 1.0, this recovers the haiku initialization.
+    Examples:
+        >>> w = torch.empty(3, 5)
+        >>> nn.init.kaiming_normal_(w, mode='fan_out', nonlinearity='relu')
+    """
+    fan = _calculate_correct_fan(tensor, mode)
+
+    if gain is None:
+        gain = calculate_gain(nonlinearity, a)
+
+    std = gain / math.sqrt(fan)
+
+    with torch.no_grad():
+        ## scale after standnormal truncated, more in line with haiku/jax implementation
+        unscaled = _no_grad_trunc_normal_(tensor, mean=0, std=1.0, a=trunc_l, b=trunc_u)
+        tensor.data = std * unscaled
+        return
+
+
+def init_kaiming_trunc_haiku(m):
+    if isinstance(m, nn.Linear):
+        m.bias.data.fill_(0.0)
+        kaiming_truncnormal_(
+            m.weight,
+            mode='fan_in',
+            nonlinearity='relu',
+            trunc_l=-2.0,
+            trunc_u=2.0,
+            gain=1.0,
+        )

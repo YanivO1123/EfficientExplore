@@ -116,7 +116,7 @@ class BaseNet(nn.Module):
         # To be specified as an input to uncertainty nets
         self.uncertainty_type = None
         # To be computed in uncertainty nets that use RND
-        self.value_rnd_propagation_scale = None
+        self.value_uncertainty_propagation_scale = None
 
     def prediction(self, state):
         raise NotImplementedError
@@ -166,55 +166,61 @@ class BaseNet(nn.Module):
             value_prefix: for ensemble-value_prefix computation, will be a list over value_prefix tensors of shape
                 (B, support). Otherwise ignored.
         """
-        # If no uncertainty mech. is used, we will return Nones
-        value_variance = None
-        value_prefix_variance = None
+        with torch.no_grad():
+            # If no uncertainty mech. is used, we will return Nones
+            if 'none' in self.uncertainty_type:
+                return None, None
+            else:
+                batch_size = next_state.shape[0]
 
-        # If the call came from initial_inference:
-        if action is None and previous_state is None and next_state is not None:
-            # Reward-variance is zeros
-            value_prefix_variance = torch.tensor([0. for _ in range(next_state.shape[0])])
+                # If the call came from initial_inference:
+                if action is None and previous_state is None and next_state is not None:
+                    # Reward-variance is zeros
+                    value_prefix_variance = torch.tensor([0. for _ in range(batch_size)]).to(next_state.device)
 
-        # Case ensemble
-        if 'ensemble' in self.uncertainty_type:
-            # The predictions of ensembles are always detached, because there's nothing that should be trained
-            if isinstance(value, list):  # If the ensemble arch. is used
-                value_variance = self.ensemble_prediction_to_variance(value).detach()
-            if isinstance(value_prefix, list):  # If the ensemble arch. is used
-                value_prefix_variance = self.ensemble_prediction_to_variance(value_prefix).detach()
-        # Case RND. The predictions of RND are detached because we don't want to train RND and UBE on the same losses
-        elif 'rnd' in self.uncertainty_type:
-            assert self.value_rnd_propagation_scale is not None
-            value_variance = self.compute_value_rnd_uncertainty(next_state.detach()).detach()
-            if action is not None:
-                # Compute reward-unc. as epistemic unc. associated with NEXT state as well as transition
-                # (previous state + action)
-                value_prefix_variance = value_variance + self.compute_reward_rnd_uncertainty(previous_state.detach(),
-                                                                        action.detach()).detach()
+                # Case ensemble
+                if 'ensemble' in self.uncertainty_type:
+                    if isinstance(value, list):
+                        value_variance = self.ensemble_prediction_to_variance(value)
+                    if isinstance(value_prefix, list):
+                        value_prefix_variance = self.ensemble_prediction_to_variance(value_prefix).detach()
+                # Case RND
+                elif 'rnd' in self.uncertainty_type:
+                    assert self.value_uncertainty_propagation_scale is not None
+                    value_variance = self.compute_value_rnd_uncertainty(next_state)
+                    if action is not None:
+                        # Compute reward-unc. as epistemic unc. associated with NEXT state as well as transition
+                        # (previous state + action)
+                        value_prefix_variance = self.compute_reward_rnd_uncertainty(previous_state, action)
 
-            # The below will give more weight to rnd_value_unc in the MCTS tree, for recognition of new states
-            # if not self.training:
-            #     value_variance = self.value_rnd_propagation_scale * self.compute_value_rnd_uncertainty(next_state.detach()).detach()
-        # Case UBE with either. The prediction of UBE is not detached, only the input.
-        if 'ube' in self.uncertainty_type:
-            # We add the UBE uncertainty to the current value_variance. We squeeze ube_unc to return prediction of shape
-            # [batch_size]. In addition, we compute the value uncertainty as the sum of ube prediction (high on known
-            # states) and value_rnd_prediction (high on unknown states)
-            value_variance = self.value_rnd_propagation_scale * value_variance + \
-                             self.compute_ube_uncertainty(next_state.detach())
+                # We compute the local uncertainty in the value of next state as the sum of next_state_based_uncertainty
+                # (value_uncertainty) and previous-state-and-action uncertainty (value_prefix_uncertainty).
+                if value_prefix_variance is not None and value_variance is not None:
+                    value_variance = value_variance + value_prefix_variance
 
+                # Case UBE with either
+                if 'ube' in self.uncertainty_type:
+                    # We compute the value uncertainty as the sum of ube prediction (reliable on known states) and
+                    # scaled value_uncertainty (more-reliable-than-UBE on unknown states).
+                    assert torch.is_tensor(value_variance) and len(value_variance.shape) == 1 and \
+                           value_variance.shape[0] == batch_size, f"type(value_variance) = {type(value_variance)} " \
+                                                                  f"and expected flat tensor of size batch_size = " \
+                                                                  f"{batch_size}"
+                    ube_prediction = self.compute_ube_uncertainty(next_state)
+                    value_variance = self.value_uncertainty_propagation_scale * value_variance + ube_prediction
 
-        return value_variance, value_prefix_variance
+                return value_variance.cpu().numpy(), value_prefix_variance.cpu().numpy()
 
     def initial_inference(self, obs) -> NetworkOutput:
         num = obs.size(0)
         state = self.representation(obs)
         actor_logit, value = self.prediction(state)
-
-        # MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
-        value_variance, value_prefix_variance = self.compute_uncertainty(next_state=state, value=value)
+        value_variance, value_prefix_variance = None, None
 
         if not self.training:
+            # MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
+            value_variance, value_prefix_variance = self.compute_uncertainty(next_state=state, value=value)
+
             # if not in training, obtain the scalars of the value/reward
             value = self.inverse_value_transform(value).detach().cpu().numpy()
             state = state.detach().cpu().numpy()
@@ -222,10 +228,6 @@ class BaseNet(nn.Module):
             # zero initialization for reward (value prefix) hidden states
             reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).detach().cpu().numpy(),
                              torch.zeros(1, num, self.lstm_hidden_size).detach().cpu().numpy())
-            if value_variance is not None:
-                value_variance = value_variance.detach().cpu().numpy()
-            if value_prefix_variance is not None:
-                value_prefix_variance = value_prefix_variance.detach().cpu().numpy()
         else:
             # zero initialization for reward (value prefix) hidden states
             reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).to('cuda'), torch.zeros(1, num, self.lstm_hidden_size).to('cuda'))
@@ -235,23 +237,21 @@ class BaseNet(nn.Module):
     def recurrent_inference(self, hidden_state, reward_hidden, action) -> NetworkOutput:
         state, reward_hidden, value_prefix = self.dynamics(hidden_state, reward_hidden, action)
         actor_logit, value = self.prediction(state)
-
-        # MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
-        value_variance, value_prefix_variance = self.compute_uncertainty(previous_state=hidden_state, next_state=state,
-                                                                         action=action, value=value,
-                                                                         value_prefix=value_prefix)
+        value_variance, value_prefix_variance = None, None
 
         if not self.training:
+            # MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
+            value_variance, value_prefix_variance = self.compute_uncertainty(previous_state=hidden_state,
+                                                                             next_state=state,
+                                                                             action=action, value=value,
+                                                                             value_prefix=value_prefix)
+
             # if not in training, obtain the scalars of the value/reward
             value = self.inverse_value_transform(value).detach().cpu().numpy()
             value_prefix = self.inverse_reward_transform(value_prefix).detach().cpu().numpy()
             state = state.detach().cpu().numpy()
             reward_hidden = (reward_hidden[0].detach().cpu().numpy(), reward_hidden[1].detach().cpu().numpy())
             actor_logit = actor_logit.detach().cpu().numpy()
-            if value_variance is not None:
-                value_variance = value_variance.detach().cpu().numpy()
-            if value_prefix_variance is not None:
-                value_prefix_variance = value_prefix_variance.detach().cpu().numpy()
 
         return NetworkOutput(value, value_prefix, actor_logit, state, reward_hidden, value_variance, value_prefix_variance)
 

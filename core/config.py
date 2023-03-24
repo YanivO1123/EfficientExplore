@@ -92,7 +92,6 @@ class BaseConfig(object):
                  num_simulations_ube: int = 30,
                  reset_ube_interval: int = 1000 * 5,
                  rnd_scale: float = 1.0,
-                 ube_scale: float = 1.0,
                  # loss_uncertainty_weighting: bool = False,
                  ):
         """Base Config for EfficietnZero
@@ -264,8 +263,6 @@ class BaseConfig(object):
             If reset_ube_interval <= 0, don't reset ube weights.
         rnd_scale: float
             In compute_rnd_uncertainty functions, scales the MSE error as a measure of uncertainty.
-        ube_scale: float
-            For stability, scales the output of UBE such that the NN weights do not have to be large.
         """
         # Self-Play
         self.action_space_size = None
@@ -407,7 +404,7 @@ class BaseConfig(object):
         self.num_simulations_ube = num_simulations_ube
         self.reset_ube_interval = reset_ube_interval
         self.periodic_ube_weight_reset = False
-        self.ube_scale = ube_scale
+        self.reset_all_weights = False
 
         # Deep sea for debugging
         self.deepsea_randomize_actions = True
@@ -528,7 +525,6 @@ class BaseConfig(object):
         # Setup cluster specific config
         if args.cluster:
             self.ensemble_size = 5
-            self.start_transitions = max(self.start_transitions, self.batch_size)
             if args.case == 'deep_sea':
                 self.ensemble_size = 10
                 # self.proj_hid = 1024
@@ -546,6 +542,7 @@ class BaseConfig(object):
 
         # Setup deep_sea specific config
         if args.case == 'deep_sea':
+            assert self.amp_type == 'none', "deep_sea is only implemented without torch_amp."
             # In deep sea w. MuExplore we want to update weights often in selfplay, to make the most of exploration
             # As a result, we compute checkpoint_interval as once every batched episode
             training_steps_per_episode_ratio = self.training_ratio * self.p_mcts_num * self.env_size
@@ -554,8 +551,8 @@ class BaseConfig(object):
             M = 1
             self.target_model_interval = min(self.target_model_interval, 10)
             # Reset ube every N batched episodes
-            N = 50
-            self.reset_ube_interval = min(self.reset_ube_interval, N * training_steps_per_episode_ratio)
+            # N = 50
+            # self.reset_ube_interval = min(self.reset_ube_interval, N * training_steps_per_episode_ratio)
             self.use_visitation_counter = args.visit_counter
             # only use visit_counter in planning when it's enabled
             self.plan_with_visitation_counter = args.p_w_vis_counter and self.use_visitation_counter

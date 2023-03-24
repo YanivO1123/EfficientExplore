@@ -84,7 +84,7 @@ if __name__ == '__main__':
     parser.add_argument('--plan_w_state_visits', action='store_true', default=False,
                         help="If true uses state visits. Otherwise, will use state-action visits."
                              "Only relevant if uses p_w_vis_counter, ")
-    parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube'], default='rnd_ube',
+    parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube', 'none'], default='ensemble_ube',
                         help="Decides the type of uncertainty to be used.")
     parser.add_argument('--number_of_exploratory_envs', type=int, default=None, help='If MuExplore, number of environments <= p_mcts_num that'
                                                                                      'are exploratory')
@@ -95,7 +95,7 @@ if __name__ == '__main__':
                         help="Resnet (original), and fully-connected (custom and only applicable to Deep Sea). "
                              "Only important to specify in environments that implement multiple architectures. "
                              "Currently, none.")
-    parser.add_argument('--sampling_times', type=int, default=0, help='If MuExplore and visitation counter, '
+    parser.add_argument('--sampling_times', type=int, default=30, help='If MuExplore and visitation counter, '
                                                                       'whether to use the sampled value '
                                                                       'propagation or not. Defaults to not')
     parser.add_argument('--alpha_zero_planning', action='store_true', default=False,

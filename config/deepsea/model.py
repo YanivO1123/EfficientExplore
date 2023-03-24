@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 
-from core.model import BaseNet, renormalize
+from core.model import BaseNet
 
 from config.deepsea.extended_deep_sea import DeepSea
 import itertools
@@ -93,6 +93,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  observation_shape,
                  action_space_size,
                  fc_state_prediction_layers,
+                 fc_state_prediction_prior_layers,
                  fc_reward_layers,
                  fc_value_layers,
                  fc_policy_layers,
@@ -112,32 +113,48 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  init_zero=False,
                  rnd_scale=1.0,
                  learned_model=True,
-                 env_size=10,
                  mapping_seed=0,
                  randomize_actions=True,
-                 uncertainty_type='rnd',
+                 uncertainty_type='ensemble_ube',
                  discount=0.997,
                  ensemble_size=5,
                  use_prior=True,
-                 prior_scale=10,
-                 ube_scale=10,
+                 prior_scale=10.0,
                  ):
         """
-            FullyConnected (more precisely non-resnet) EfficientZero network.
-            Parameters
+            FullyConnected (more precisely non-resnet) EfficientZero network. Based on the architecture of
+            EfficientZeroNet from config.atari.model.
+            Additional-to-deep_sea parameters are specified below.
+            (Additional) Parameters
             __________
             observation_shape: tuple or list
                 shape of observations: [C, W, H] = [1, N, N], for deep sea for which this arch. is implemented.
-            learned_model:
-            env_size:
-            mapping_seed:
-            randomize_actions:
+            learned_model: bool
+                Whether the transition model is learned (true, MuZero), or given (False, ZetaZero, can be thought of as
+                AlphaZero with learned reward function)
+            mapping_seed: int
+                The seed initializing the random actions of deep_sea, for planning with the true transition model.
+            randomize_actions: bool
+                Whether actions in deep_sea are randomized or not, when planning with a true model.
+            uncertainty_type: string
+                Specifies the type of uncertainty architecture used. Options: 'ensemble', 'ensemble_ube', 'rnd',
+                'rnd_ube'.
+            discount: float
+                Used to compute the value-uncertainty-propagation scale. This scale guarantees that unseen states
+                (high uncertainty from rnd or ensemble, but low from UBE), communicate their uncertainty at the right
+                scale.
+            ensemble_size: int
+                The size of the ensemble.
+            use_prior: bool
+                Whether to use network-prior (See http://128.84.4.34/abs/1806.03335) on the ensemble members, or not.
+            prior_scale: float
+                The scale of the contribution of the prior function to the computation.
         """
         super(FullyConnectedEfficientExploreNet, self).__init__(inverse_value_transform, inverse_reward_transform,
                                                                 lstm_hidden_size)
         self.init_zero = init_zero
         self.action_space_size = action_space_size
-        # For consistency loss
+        # For Efficient-zero style consistency loss
         self.proj_hid = proj_hid
         self.proj_out = proj_out
         self.pred_hid = pred_hid
@@ -149,14 +166,21 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         self.ensemble_size = ensemble_size
         self.use_prior = use_prior
         self.prior_scale = prior_scale
+        self.env_size = observation_shape[-1]
+
+        # The value_uncertainty_propagation_scale coeff is the sum of a geometric series with r = gamma ** 2 and
+        # n = env_size. The idea is that for new states local variance prediction should be more reliable than ube
+        self.value_uncertainty_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
 
         # The size of flattened encoded state:
         self.encoded_state_size = observation_shape[0] * observation_shape[1] * observation_shape[2]
-        # The size of the input to the dynamics network is (num_channels + the action channel) * H * W
-        self.dynamics_input_size = (observation_shape[0] + 1) * observation_shape[1] * observation_shape[2]
+        # The size of the input to the dynamics network is C * S * H * W + C * S * action_space
+        self.dynamics_input_size = observation_shape[0] * observation_shape[1] * observation_shape[2] + \
+                                         observation_shape[0] * action_space_size
 
         # In this arch. the representation is the original observation
         self.representation_network = torch.nn.Identity()
+
         self.policy_network = mlp(self.encoded_state_size, fc_policy_layers, action_space_size, init_zero=init_zero,
                                   momentum=momentum)
 
@@ -174,13 +198,14 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                                      momentum=momentum)
 
         self.dynamics_network = FullyConnectedDynamicsNetwork(
-            env_size,
+            self.env_size,
             mapping_seed,
             randomize_actions,
             self.dynamics_input_size,
             self.encoded_state_size,
             observation_shape,
             fc_state_prediction_layers,
+            fc_state_prediction_prior_layers,
             fc_reward_layers,
             reward_support_size,
             lstm_hidden_size=lstm_hidden_size,
@@ -216,13 +241,11 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             self.value_rnd_target_network = no_batch_norm_mlp(self.input_size_value_rnd, fc_rnd_target_layers[:-1],
                                                               fc_rnd_target_layers[-1],
                                                               init_zero=False)
-            # The value_rnd_unc_prop coeff is the sum of a geometric series with r = gamma ** 2 and n = env_size
-            self.value_rnd_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
 
         if 'ube' in uncertainty_type:
-            self.ube_scale = ube_scale
+            # We don't initialize ube with zeros because we don't want to penalize the uncertainty of unobserved states
             self.ube_network = no_batch_norm_mlp(self.encoded_state_size, fc_ube_layers, 1,
-                                   init_zero=init_zero)#, momentum=momentum)
+                                   init_zero=False)#, momentum=momentum)
 
     def representation(self, observation):
         # Regardless of the number of stacked observations, we only pass the last
@@ -232,6 +255,17 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
         # With the fully-connected deep_sea architecture, we maintain the original observation as the representation
         encoded_state = self.representation_network(observation)
+
+        # Rescale the states to make them easier to learn with the MSE-based consistency loss.
+        if self.learned_model:
+            # Expected shape is [B , C * S, H, W]
+            # We rescale the state to make it easier to learn with mse as consistency loss
+            encoded_state = encoded_state * 10
+
+        assert encoded_state.shape == observation.shape, f"encoded_state.shape != observation.shape. " \
+                                                         f"encoded_state.shape = {encoded_state.shape}, " \
+                                                         f"observation.shape = {observation.shape}"
+
         return encoded_state
 
     def prediction(self, encoded_state):
@@ -250,23 +284,20 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         return policy, value
 
     def dynamics(self, encoded_state, reward_hidden, action):
-        # Stack encoded_state with a game specific one hot encoded action
+        # Turn in a state_action vector
         action_one_hot = (
-            torch.ones(
+            torch.zeros(
                 (
                     encoded_state.shape[0],  # batch dimension
-                    1,  # channels dimension
-                    encoded_state.shape[2],  # H dim
-                    encoded_state.shape[3],  # W dim
+                    self.action_space_size
                 )
             )
             .to(action.device)
             .float()
         )
-        action_one_hot = (
-                action[:, :, None, None] * action_one_hot / self.action_space_size
-        )
-        x = torch.cat((encoded_state, action_one_hot), dim=1)
+        action_one_hot.scatter_(1, action.long(), 1.0)
+        flattened_state = encoded_state.reshape(-1, self.encoded_state_size)
+        x = torch.cat((flattened_state, action_one_hot), dim=1).detach()
         if self.learned_model:
             next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, reward_hidden)
         else:
@@ -300,7 +331,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                                                              reduction='none').sum(dim=-1)
 
     def compute_reward_rnd_uncertainty(self, state, action):
-        # Turn in a state_action vector
+        flattened_state = state.reshape(-1, self.input_size_reward_rnd - self.action_space_size)
+
         action_one_hot = (
             torch.zeros(
                 (
@@ -312,9 +344,9 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             .float()
         )
         action_one_hot.scatter_(1, action.long(), 1.0)
-        flattened_state = state.reshape(-1, self.input_size_reward_rnd - self.action_space_size)
+
         state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
-        # Compute the RND uncertainty
+
         return self.rnd_scale * torch.nn.functional.mse_loss(self.reward_rnd_network(state_action),
                                                              self.reward_rnd_target_network(state_action).detach(),
                                                              reduction='none').sum(dim=-1)
@@ -351,14 +383,15 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                                )
 
     def ensemble_prediction_to_variance(self, logits):
-        if not isinstance(logits, list):
-            return None
+        assert isinstance(logits, list), f"ensemble_prediction_to_variance was called on input that is not a list. " \
+                                         f"type(logits) = {type(logits)}"
         # logits is a list of length ensemble_size, of tensors of shape: (num_parallel_envs, full_support_size)
         with torch.no_grad():
-            # Softmax the logits
-            logits = [torch.softmax(logits[i], dim=1) for i in range(len(logits))]
+            batch_size = logits[0].shape[0]
+            # Softmax the logits. Can also log-softmax the logits, which will result in more variance but less reliable.
+            logits = [torch.softmax(logits[i], dim=-1) for i in range(len(logits))]
 
-            # Stack into a tensor to compute the variance using torch.
+            # Stack into a tensor to compute the variance using torch
             stacked_tensor = torch.stack(logits, dim=0)
             # Shape of stacked_tensor: (ensemble_size, num_parallel_envs, full_support_size)
 
@@ -367,8 +400,12 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             # Resulting shape of scalar_variance: (num_parallel_envs, full_support_size)
 
             # Sum the per-entry variance scores
-            scalar_variance = scalar_variance.sum(-1)
+            scalar_variance = scalar_variance.sum(-1).squeeze()
             # Resulting shape of scalar_variance: (num_parallel_envs)
+
+            assert len(scalar_variance.shape) == 1 and scalar_variance.shape[0] == batch_size, \
+                f"expected scalar_variance.shape = (batch_size), and got scalar_variance.shape = " \
+                f"{scalar_variance.shape}, while batch_size = {batch_size}"
 
             return scalar_variance
 
@@ -382,6 +419,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
                  hidden_state_size,
                  hidden_state_shape,
                  fc_state_prediction_layers,
+                 fc_state_prediction_prior_layers,
                  fc_reward_layers,
                  full_support_size,
                  lstm_hidden_size=64,
@@ -391,7 +429,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
                  ensemble=False,
                  ensemble_size=5,
                  use_prior=True,
-                 prior_scale=10,
+                 prior_scale=10.0,
                  ):
         """
         Non-resnet, non-conv dynamics network, for deep_sea.
@@ -416,30 +454,36 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         self.ensemble = ensemble
         self.use_prior = use_prior
         self.prior_scale = prior_scale
+        self.state_prediction_net_prior = None
 
         # Init dynamics prediction, learned or given
         if learned_model:
-            self.state_prediction_net = mlp(dynamics_input_size, fc_state_prediction_layers, hidden_state_size,
-                                            init_zero=init_zero,
-                                            momentum=momentum)
-            self.action_mapping = None
-        else:
-            self.action_mapping = torch.from_numpy(DeepSea(size=env_size, mapping_seed=mapping_seed, seed=mapping_seed,
-                                                           randomize_actions=randomize_actions)._action_mapping).long()
-            self.action_mapping = self.action_mapping * 2 - 1
+            self.state_prediction_net = no_batch_norm_mlp(dynamics_input_size, fc_state_prediction_layers,
+                                                          hidden_state_size, init_zero=False)
+            # if self.use_prior:
+            #     self.state_prediction_net_prior = no_batch_norm_mlp(dynamics_input_size, fc_state_prediction_prior_layers,
+            #                                               hidden_state_size, init_zero=False)
 
-        # The input to the lstm is the concat tensor of hidden_state and action
-        self.lstm = nn.LSTM(input_size=dynamics_input_size, hidden_size=lstm_hidden_size)
-        self.bn_value_prefix = nn.BatchNorm1d(lstm_hidden_size, momentum=momentum)
+        self.action_mapping = torch.from_numpy(DeepSea(size=env_size, mapping_seed=mapping_seed, seed=mapping_seed,
+                                                       randomize_actions=randomize_actions)._action_mapping).long()
+        self.action_mapping = self.action_mapping * 2 - 1
+
+        # The architecture of the reward prediction is different between ensemble and not-ensemble.
+        # To limit computation cost ensembles do not use EfficientZero's batch-norm / LSTM architecture.
         if self.ensemble:
-            self.fc = nn.ModuleList([mlp(lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero,
+            self.fc = nn.ModuleList([mlp(dynamics_input_size, fc_reward_layers, full_support_size, init_zero=init_zero,
                                          momentum=momentum)
                                      for _ in range(ensemble_size)])
             if self.use_prior:
-                self.fc_net_prior = nn.ModuleList([mlp(lstm_hidden_size, fc_reward_layers, full_support_size,
-                                                       init_zero=init_zero, momentum=momentum)
+                self.fc_net_prior = nn.ModuleList([mlp(dynamics_input_size, fc_reward_layers, full_support_size,
+                                                       init_zero=False, momentum=momentum)
                                                    for _ in range(ensemble_size)])
+            self.lstm = None
+            self.bn_value_prefix = None
         else:
+            # The input to the lstm is the concat tensor of hidden_state and action
+            self.lstm = nn.LSTM(input_size=dynamics_input_size, hidden_size=lstm_hidden_size)
+            self.bn_value_prefix = nn.BatchNorm1d(lstm_hidden_size, momentum=momentum)
             self.fc = mlp(lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero,
                           momentum=momentum)
 
@@ -450,12 +494,17 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         if self.learned_model:
             # Next-state prediction is done based on a FC network
             next_state = self.state_prediction_net(x)
-            next_state = nn.functional.relu(next_state)
+            # if self.use_prior:
+            #     next_state = self.state_prediction_net(x) + self.prior_scale * self.state_prediction_net_prior(x.detach()).detach()
+            # else:
+            #     next_state = self.state_prediction_net(x)
+
             # Reshape the state to the shape MuZero expects: [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
-            next_state = next_state.view(-1,
+            next_state = next_state.reshape(-1,
                                          self.hidden_state_shape[0],
                                          self.hidden_state_shape[1],
                                          self.hidden_state_shape[2])
+
         else:
             assert current_state is not None and action is not None, f"Cannot plan with true deep_sea model in " \
                                                                      f"dynamics without current_state and action inputs"
@@ -463,20 +512,20 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             # [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
             next_state = self.get_batched_next_states(current_state, action)
 
-        # Reward prediction is done based on EfficientExplore architecture
-        x = x.unsqueeze(0)
-        value_prefix, reward_hidden = self.lstm(x, reward_hidden)
-        value_prefix = value_prefix.squeeze(0)
-        value_prefix = self.bn_value_prefix(value_prefix)
-        value_prefix = nn.functional.relu(value_prefix)
+        # Reward prediction is done based on EfficientExplore architecture, only if we don't use an ensemble.
         if self.ensemble:
             if self.use_prior:
-                value_prefix = [value_prefix_net(value_prefix) + self.prior_scale *
-                                prior_net(value_prefix.detach()).detach() for value_prefix_net, prior_net
+                value_prefix = [value_prefix_net(x) + self.prior_scale *
+                                prior_net(x.detach()).detach() for value_prefix_net, prior_net
                                 in zip(self.fc, self.fc_net_prior)]
             else:
-                value_prefix = [value_prefix_net(value_prefix) for value_prefix_net in self.fc]
+                value_prefix = [value_prefix_net(x) for value_prefix_net in self.fc]
         else:
+            x = x.unsqueeze(0)
+            value_prefix, reward_hidden = self.lstm(x, reward_hidden)
+            value_prefix = value_prefix.squeeze(0)
+            value_prefix = self.bn_value_prefix(value_prefix)
+            value_prefix = nn.functional.relu(value_prefix)
             value_prefix = self.fc(value_prefix)
 
         return next_state, reward_hidden, value_prefix
@@ -513,11 +562,11 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         flattened_batched_states = batched_states.reshape(shape=(batch_size, N * N)).to(batched_states.device)
 
         # Get the indexes of the 1 hot along the B dimension, and shape them to 1 dim vectors of size batch_size
-        rows, columns = (flattened_batched_states.argmax(dim=1) // N).long().squeeze().to(batched_states.device), (
-                flattened_batched_states.argmax(dim=1) % N).long().squeeze().to(batched_states.device)
+        rows, columns = (flattened_batched_states.argmax(dim=1) // N).long().squeeze(-1).to(batched_states.device), (
+                flattened_batched_states.argmax(dim=1) % N).long().squeeze(-1).to(batched_states.device)
 
         # Switch actions to -1, +1
-        batched_actions = batched_actions.squeeze() * 2 - 1
+        batched_actions = batched_actions.squeeze(-1) * 2 - 1
 
         # action_mapping expected to already be in the form -1, +1, this line is here for logic
         # self.action_mapping = self.action_mapping * 2 - 1
@@ -555,3 +604,14 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         batched_next_states = batched_next_states[:, :, :-1, :-1]
 
         return batched_next_states
+
+
+def normalize_along_last_dim(x):
+    max_val = x.max(dim=-1, keepdim=True)[0]
+    min_val = x.min(dim=-1, keepdim=True)[0]
+    # Compute the range of values along the last dimension, avoiding division by zero
+    range_val = torch.where((max_val - min_val) == 0, torch.tensor([1]).to(x.device), max_val - min_val)
+    # Normalize the tensor along the last dimension, avoiding division by zero
+    x_normalized = torch.where((max_val - min_val) == 0, x, (x - min_val) / range_val)
+
+    return x_normalized
