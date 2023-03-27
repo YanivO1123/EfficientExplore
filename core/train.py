@@ -78,6 +78,9 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
         target_value_prefix, target_value, target_policy, target_ube = targets_batch
         target_ube = torch.from_numpy(target_ube).to(config.device).float()
+        if config.categorical_ube:
+            transformed_target_ube = config.scalar_transform(target_ube)
+            target_ube = config.ube_phi(transformed_target_ube)
     else:
         target_value_prefix, target_value, target_policy = targets_batch
         target_ube = None
@@ -852,6 +855,8 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                             value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
                         if 'ube' in config.uncertainty_architecture_type:
                             ube_predictions = model.compute_ube_uncertainty(hidden_states)
+                            if config.categorical_ube:
+                                ube_predictions = config.inverse_ube_transform(ube_predictions).squeeze()
 
                         network_output_recur_left = model.recurrent_inference(hidden_states,
                                                                               (hidden_states_c_reward, hidden_states_h_reward),
@@ -878,6 +883,8 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                         reward_rnds_right = model.compute_reward_rnd_uncertainty(hidden_states, actions_right)
                     if 'ube' in config.uncertainty_architecture_type:
                         ube_predictions = model.compute_ube_uncertainty(hidden_states)
+                        if config.categorical_ube:
+                            ube_predictions = config.inverse_ube_transform(ube_predictions).squeeze()
 
                     network_output_recur_left = model.recurrent_inference(hidden_states,
                                                                           (hidden_states_c_reward, hidden_states_h_reward),

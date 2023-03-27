@@ -105,7 +105,10 @@ class DeepSeaConfig(BaseConfig):
         self.fc_value_layers = [128, 128]           # [64, 64], [128, 128]
         self.fc_value_prior_layers = [256, 128]     # [128, 128]
         self.fc_policy_layers = [128, 128]          # [64, 64], [128, 128]
+        # UBE architecture
         self.fc_ube_layers = [128, 128, 128]
+        self.categorical_ube = True
+        self.ube_support = DiscreteSupport(0, 10, delta=1)
         # RND architecture
         self.fc_rnd_layers = [1024, 256]
         self.fc_rnd_target_layers = [1024, 1024, 256]
@@ -187,6 +190,9 @@ class DeepSeaConfig(BaseConfig):
             use_encoder=self.use_encoder,
             encoder_layers=self.encoder_layers,
             encoding_size=self.encoding_size,
+            categorical_ube=self.categorical_ube,
+            inverse_ube_transform=self.inverse_ube_transform,
+            ube_support_size=self.ube_support.size,
         )
 
         if 'rnd' in self.uncertainty_architecture_type:
@@ -263,8 +269,16 @@ class DeepSeaConfig(BaseConfig):
         return scalar_loss
 
     def ube_loss(self, prediction, target):
-        # return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
-        return torch.nn.functional.mse_loss(prediction, target, reduction='none')
+        if self.categorical_ube:
+            return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
+        else:
+            return torch.nn.functional.mse_loss(prediction, target, reduction='none')
+
+    def inverse_ube_transform(self, ube_logits):
+        return self.inverse_scalar_transform(ube_logits, self.ube_support)
+
+    def ube_phi(self, x):
+        return self._phi(x, self.ube_support.min, self.ube_support.max, self.ube_support.size)
 
     # def rnd_loss(self, prediction, target):
     #     return torch.nn.functional.mse_loss(prediction, target, reduction='none')

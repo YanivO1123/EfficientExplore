@@ -121,6 +121,8 @@ class BaseNet(nn.Module):
         self.learned_model = None
         self.use_encoder = None
         self.representation_encoder = None
+        self.categorical_ube = True
+        self.inverse_ube_transform = None
 
     def prediction(self, state):
         raise NotImplementedError
@@ -211,6 +213,12 @@ class BaseNet(nn.Module):
                                                                   f"and expected flat tensor of size batch_size = " \
                                                                   f"{batch_size}"
                     ube_prediction = self.compute_ube_uncertainty(next_state)
+                    if self.categorical_ube or len(ube_prediction.shape) > 1:
+                        ube_prediction = self.inverse_ube_transform(ube_prediction).squeeze()
+                        assert ube_prediction.shape == value_variance.shape, \
+                            f"ube_prediction.shape = {ube_prediction.shape}, " \
+                            f"value_variance.shape = {value_variance.shape}, and should be equal." \
+                            f"Expecting ({next_state.shape[0]})"
                     value_variance = self.value_uncertainty_propagation_scale * value_variance + ube_prediction
 
                 return value_variance.cpu().numpy(), value_prefix_variance.cpu().numpy()

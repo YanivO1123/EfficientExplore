@@ -127,6 +127,9 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  use_encoder=False,
                  encoder_layers=None,
                  encoding_size=0,
+                 categorical_ube=False,
+                 inverse_ube_transform=None,
+                 ube_support_size=None
                  ):
         """
             FullyConnected (more precisely non-resnet) EfficientZero network. Based on the architecture of
@@ -289,9 +292,19 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                                                               init_zero=False)
 
         if 'ube' in uncertainty_type:
-            # We don't initialize ube with zeros because we don't want to penalize the uncertainty of unobserved states
-            self.ube_network = no_batch_norm_mlp(self.encoded_state_size, fc_ube_layers, 1,
-                                                 init_zero=False)  # , momentum=momentum)
+            self.inverse_ube_transform = inverse_ube_transform
+            self.categorical_ube = categorical_ube
+            if self.categorical_ube:
+                assert inverse_ube_transform is not None and ube_support_size is not None, \
+                    f"Can instantiate categorical UBE only if ube_support_size and inverse_ube_transform are " \
+                    f"specified. inverse_ube_transform is None = {inverse_ube_transform is None}, " \
+                    f"ube_support_size = {ube_support_size}"
+                self.ube_network = no_batch_norm_mlp(self.encoded_state_size, fc_ube_layers, ube_support_size,
+                                                     init_zero=False)
+            else:
+                # We don't initialize ube with zeros because we don't want to penalize the uncertainty of unobserved states
+                self.ube_network = no_batch_norm_mlp(self.encoded_state_size, fc_ube_layers, 1,
+                                                     init_zero=False)  # , momentum=momentum)
 
     def representation(self, observation):
         # Regardless of the number of stacked observations, we only pass the last
@@ -422,9 +435,10 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         if self.use_encoder and not self.learned_model:
             state = self.representation_encoder(state.detach()).detach()
         # We squeeze the result to return tensor of shape [B] instead of [B, 1]
-        ube_prediction = self.ube_network(state).squeeze()
+        ube_prediction = self.ube_network(state)
         # To guarantee that output value is positive, we treat it as a logit instead of as a direct scalar
-        ube_prediction = torch.exp(ube_prediction)
+        if not self.categorical_ube:
+            ube_prediction = torch.exp(ube_prediction.squeeze(-1))
         return ube_prediction
 
     def rnd_ube_parameters(self):
