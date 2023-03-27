@@ -142,7 +142,7 @@ class DataWorker(object):
 
         # MuExplore: keep track of values and value uncertainties to debug beta
         value_max, value_unc_max, value_min, value_unc_min, value_sum, value_unc_sum, value_unc_count = -math.inf, -math.inf, math.inf, math.inf, 0, 0, 0
-        previous_visitation_counts = np.zeros(shape=(self.config.env_size))
+        previous_visitation_counts = np.zeros(shape=(self.config.env_size, self.config.env_size))
         # To alternate random action selection or det. action selection in deep_sea
         deterministic_deep_sea = False
         # We change action selection in deepsea from random to det. every N = 1 batched episodes
@@ -453,12 +453,12 @@ class DataWorker(object):
                                             # f"Visitations to actions at bottom-right-corner-state: {self.visitation_counter.sa_counts[-1,-1]} \n"
                                             f"Printing the state visitation counter: \n"
                                             f"{self.visitation_counter.s_counts} \n"
-                                            f"Printing the change in state visitation counter at the last row: \n"
-                                            f"{self.visitation_counter.s_counts[-1] - previous_visitation_counts}"
+                                            f"Printing the change in state visitation counter: \n"
+                                            f"{self.visitation_counter.s_counts - previous_visitation_counts}"
                                             , flush=True)
-                                        previous_visitation_counts = copy.deepcopy(self.visitation_counter.s_counts[-1])
+                                        previous_visitation_counts = copy.deepcopy(self.visitation_counter.s_counts)
                                         if self.config.mu_explore:
-                                            if self.config.learned_model:
+                                            if self.config.learned_model and not self.config.use_encoder:
                                                 self.debug_state_prediction(model)
                                             if 'deep_sea/0' in self.config.env_name:
                                                 self.debug_deep_sea(model)

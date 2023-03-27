@@ -42,7 +42,7 @@ class DeepSeaConfig(BaseConfig):
             image_based=False,   #
             # lr scheduler
             lr_warm_up=0.01,
-            lr_init=0.5 * 1E-2,    # torch_amp=0.2, none=1E-3,
+            lr_init=1E-3,    # torch_amp=0.2, none=1E-3,
             lr_decay_rate=0.1,     # 0.1
             lr_decay_steps=50 * 1000,
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
@@ -59,8 +59,8 @@ class DeepSeaConfig(BaseConfig):
             reward_loss_coeff=1,
             value_loss_coeff=0.5,  # 0.25 original # 1 0.5
             policy_loss_coeff=0.5,
-            consistency_coeff=2,
-            ube_loss_coeff=1,
+            consistency_coeff=4,
+            ube_loss_coeff=0.25,
             # reward sum
             lstm_hidden_size=64, #512
             use_value_prefix=False,
@@ -86,7 +86,7 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            ube_td_steps=3,
+            ube_td_steps=2,
             reset_ube_interval=5000,
             rnd_scale=0.1,
         )
@@ -96,15 +96,24 @@ class DeepSeaConfig(BaseConfig):
         self.bn_mt = 0.1
 
         # Fullyconnected arch. specs
+        self.identity_representation = True
+        self.fc_representation_layers = [128, 128]
         self.fc_state_prediction_layers = [128, 128, 128] # [64] [128, 128, 128]
         self.fc_state_prediction_prior_layers = [128, 128, 128] # [128, 128, 128]
-        self.fc_reward_layers = [128, 128] # [64, 64]
-        self.fc_value_layers = [128, 128] # [64, 64]
-        self.fc_policy_layers = [128, 128] # [64, 64]
+        self.fc_reward_layers = [128, 128] # [64, 64], [128, 128]
+        self.fc_reward_prior_layers = [256, 128]    # [128, 128]
+        self.fc_value_layers = [128, 128]           # [64, 64], [128, 128]
+        self.fc_value_prior_layers = [256, 128]     # [128, 128]
+        self.fc_policy_layers = [128, 128]          # [64, 64], [128, 128]
         self.fc_ube_layers = [128, 128, 128]
+        # RND architecture
         self.fc_rnd_layers = [1024, 256]
         self.fc_rnd_target_layers = [1024, 1024, 256]
         self.fc_lstm_hidden_size = self.lstm_hidden_size
+        # Encoder architecture
+        self.use_encoder = False
+        self.encoder_layers = [1024, 1024, 256]
+        self.encoding_size = 4  # The encoded state is of size self.encoding_size * self.encoding_size
 
         self.reset_all_weights = False
 
@@ -143,10 +152,14 @@ class DeepSeaConfig(BaseConfig):
         model = FullyConnectedEfficientExploreNet(
             self.obs_shape,
             self.action_space_size,
+            self.identity_representation,
+            self.fc_representation_layers,
             self.fc_state_prediction_layers,
             self.fc_state_prediction_prior_layers,
             self.fc_reward_layers,
+            self.fc_reward_prior_layers,
             self.fc_value_layers,
+            self.fc_value_prior_layers,
             self.fc_policy_layers,
             self.fc_rnd_layers,
             self.fc_rnd_target_layers,
@@ -171,6 +184,9 @@ class DeepSeaConfig(BaseConfig):
             ensemble_size=self.ensemble_size,
             use_prior=self.use_prior,
             prior_scale=self.prior_scale,
+            use_encoder=self.use_encoder,
+            encoder_layers=self.encoder_layers,
+            encoding_size=self.encoding_size,
         )
 
         if 'rnd' in self.uncertainty_architecture_type:
@@ -192,6 +208,11 @@ class DeepSeaConfig(BaseConfig):
                 for p in model.value_network_prior.parameters():
                     p.requires_grad = False
                     p *= 2
+        if self.use_encoder:
+            model.representation_encoder.apply(fn=init_kaiming_trunc_haiku)
+            for p in model.representation_encoder.parameters():
+                p.requires_grad = False
+                p *= 2
 
         return model
 

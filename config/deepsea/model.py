@@ -92,10 +92,14 @@ class FullyConnectedEfficientExploreNet(BaseNet):
     def __init__(self,
                  observation_shape,
                  action_space_size,
+                 identity_representation,
+                 fc_representation_layers,
                  fc_state_prediction_layers,
                  fc_state_prediction_prior_layers,
                  fc_reward_layers,
+                 fc_reward_prior_layers,
                  fc_value_layers,
+                 fc_value_prior_layers,
                  fc_policy_layers,
                  fc_rnd_layers,
                  fc_rnd_target_layers,
@@ -120,6 +124,9 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  ensemble_size=5,
                  use_prior=True,
                  prior_scale=10.0,
+                 use_encoder=False,
+                 encoder_layers=None,
+                 encoding_size=0,
                  ):
         """
             FullyConnected (more precisely non-resnet) EfficientZero network. Based on the architecture of
@@ -149,6 +156,13 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                 Whether to use network-prior (See http://128.84.4.34/abs/1806.03335) on the ensemble members, or not.
             prior_scale: float
                 The scale of the contribution of the prior function to the computation.
+            use_encoder: bool
+                Whether to use a random encoder or not, to reduce the size of the state space.
+            encoder_layers: list[int]
+                The architecture of the randomly initialized, untrained, (non-BN) MLP that is the encoder.
+            encoding_size: int
+                The sqrt of the size of the encoded state, so that the structure (C * S, H, W) can be maintained.
+                Only used with the encoder.
         """
         super(FullyConnectedEfficientExploreNet, self).__init__(inverse_value_transform, inverse_reward_transform,
                                                                 lstm_hidden_size)
@@ -167,19 +181,49 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         self.use_prior = use_prior
         self.prior_scale = prior_scale
         self.env_size = observation_shape[-1]
-
+        self.use_encoder = use_encoder
         # The value_uncertainty_propagation_scale coeff is the sum of a geometric series with r = gamma ** 2 and
         # n = env_size. The idea is that for new states local variance prediction should be more reliable than ube
         self.value_uncertainty_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
 
-        # The size of flattened encoded state:
-        self.encoded_state_size = observation_shape[0] * observation_shape[1] * observation_shape[2]
-        # The size of the input to the dynamics network is C * S * H * W + C * S * action_space
-        self.dynamics_input_size = observation_shape[0] * observation_shape[1] * observation_shape[2] + \
-                                         observation_shape[0] * action_space_size
+        assert not (use_encoder and not identity_representation), \
+            f"Encoder and learned representation are not compatible. use_encoder = {use_encoder}, " \
+            f"identity_representation = {identity_representation}"
 
+        self.use_identity_representation = identity_representation
+
+        if self.use_encoder:
+            assert encoder_layers is not None, f"encoder_layers must be a list of ints, and was {encoder_layers}"
+            assert encoding_size > 0, f"encoding_size must be an int greater than zero, and was {encoding_size}"
+            self.encoding_size = encoding_size
+            self.encoded_state_size = encoding_size * encoding_size
+            self.dynamics_input_size = self.encoded_state_size + action_space_size
+            encoder_input_size = observation_shape[0] * observation_shape[1] * observation_shape[2]
+            self.representation_encoder = no_batch_norm_mlp(encoder_input_size, encoder_layers, self.encoded_state_size,
+                                                            init_zero=False)
+            hidden_state_shape = (1, encoding_size, encoding_size)  # C * S, W, H
         # In this arch. the representation is the original observation
-        self.representation_network = torch.nn.Identity()
+        elif identity_representation:
+            self.representation_network = torch.nn.Identity()
+            # The size of flattened encoded state:
+            self.encoded_state_size = observation_shape[0] * observation_shape[1] * observation_shape[2]
+            # The size of the input to the dynamics network is C * S * H * W + C * S * action_space
+            self.dynamics_input_size = observation_shape[0] * observation_shape[1] * observation_shape[2] + \
+                                       observation_shape[0] * action_space_size
+            hidden_state_shape = observation_shape
+        else:
+            assert fc_representation_layers is not None and encoding_size >= 1 and not use_encoder, \
+                f"Requires: fc_representation_layers not None, encoding_size >= 1 and not use_encoder. \n" \
+                f"Got: fc_representation_layers = {fc_representation_layers}, encoding_size = {encoding_size}, " \
+                f"use_encoder = {use_encoder}"
+            self.encoding_size = encoding_size
+            self.encoded_state_size = encoding_size * encoding_size
+            self.dynamics_input_size = self.encoded_state_size + action_space_size
+            representation_input_size = observation_shape[0] * observation_shape[1] * observation_shape[2]
+            hidden_state_shape = (1, encoding_size, encoding_size)
+            self.representation_network = no_batch_norm_mlp(representation_input_size, fc_representation_layers,
+                                                            self.encoded_state_size,
+                                                            init_zero=False)
 
         self.policy_network = mlp(self.encoded_state_size, fc_policy_layers, action_space_size, init_zero=init_zero,
                                   momentum=momentum)
@@ -189,7 +233,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                                                     init_zero=init_zero, momentum=momentum)
                                                 for _ in range(ensemble_size)])
             if self.use_prior:
-                self.value_network_prior = nn.ModuleList([mlp(self.encoded_state_size, fc_value_layers,
+                self.value_network_prior = nn.ModuleList([mlp(self.encoded_state_size, fc_value_prior_layers,
                                                               value_support_size, init_zero=init_zero,
                                                               momentum=momentum)
                                                           for _ in range(ensemble_size)])
@@ -203,19 +247,22 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             randomize_actions,
             self.dynamics_input_size,
             self.encoded_state_size,
-            observation_shape,
+            hidden_state_shape,
             fc_state_prediction_layers,
             fc_state_prediction_prior_layers,
             fc_reward_layers,
+            fc_reward_prior_layers,
             reward_support_size,
             lstm_hidden_size=lstm_hidden_size,
             momentum=momentum,
             init_zero=init_zero,
-            learned_model=learned_model,
+            learned_model=self.learned_model,
             ensemble=True if 'ensemble' in uncertainty_type else False,
             ensemble_size=self.ensemble_size,
             use_prior=self.use_prior,
-            prior_scale=self.prior_scale
+            prior_scale=self.prior_scale,
+            use_encoder=self.use_encoder,
+            representation_encoder=self.representation_encoder if not self.learned_model and self.use_encoder else None,
         )
 
         # projection
@@ -229,8 +276,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         if 'rnd' in uncertainty_type:
             self.rnd_scale = rnd_scale
             self.input_size_value_rnd = self.encoded_state_size
-            self.input_size_reward_rnd = observation_shape[0] * observation_shape[1] * observation_shape[2] + \
-                                         observation_shape[0] * action_space_size
+            self.input_size_reward_rnd = self.dynamics_input_size
             # It's important that the RND nets are NOT initiated with zero
             self.reward_rnd_network = no_batch_norm_mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1],
                                                         fc_rnd_layers[-1], init_zero=False)
@@ -245,7 +291,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         if 'ube' in uncertainty_type:
             # We don't initialize ube with zeros because we don't want to penalize the uncertainty of unobserved states
             self.ube_network = no_batch_norm_mlp(self.encoded_state_size, fc_ube_layers, 1,
-                                   init_zero=False)#, momentum=momentum)
+                                                 init_zero=False)  # , momentum=momentum)
 
     def representation(self, observation):
         # Regardless of the number of stacked observations, we only pass the last
@@ -254,23 +300,37 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         observation = observation[:, -1:, :, :]
 
         # With the fully-connected deep_sea architecture, we maintain the original observation as the representation
-        encoded_state = self.representation_network(observation)
-
-        # Rescale the states to make them easier to learn with the MSE-based consistency loss.
-        if self.learned_model:
-            # Expected shape is [B , C * S, H, W]
-            # We rescale the state to make it easier to learn with mse as consistency loss
-            encoded_state = encoded_state * 10
-
-        assert encoded_state.shape == observation.shape, f"encoded_state.shape != observation.shape. " \
-                                                         f"encoded_state.shape = {encoded_state.shape}, " \
-                                                         f"observation.shape = {observation.shape}"
+        if self.use_identity_representation:
+            encoded_state = self.representation_network(observation)
+            # We only encode in representation if learned model is used. Otherwise, we pass the true state and encode it in
+            # prediction and dynamics locally, to enable planning with the true model.
+            if self.use_encoder and self.learned_model:
+                # Flatten
+                encoded_state = encoded_state.reshape(encoded_state.shape[0], -1)
+                # Encode
+                encoded_state = self.representation_encoder(encoded_state.detach()).detach()
+                # Reshape back to [B , C * S, H, W] structure -> [B, 1, encoding_size, encoding_size]
+                encoded_state = encoded_state.reshape(encoded_state.shape[0], 1, self.encoding_size, self.encoding_size)
+            elif self.learned_model:
+                # Rescale the states to make them easier to learn with the MSE-based consistency loss.
+                encoded_state = encoded_state * 10
+        else:
+            batch_size = observation.shape[0]
+            observation = observation.reshape(observation.shape[0], -1)
+            encoded_state = self.representation_network(observation).reshape(batch_size, 1, self.encoding_size,
+                                                                             self.encoding_size)
 
         return encoded_state
 
     def prediction(self, encoded_state):
         # We reshape the encoded_state to the shape of input of the FC nets that follow
-        encoded_state = encoded_state.reshape(-1, self.encoded_state_size)
+        encoded_state = encoded_state.reshape(encoded_state.shape[0], -1)
+
+        # If we use an encoder, we plan with the true model, and this call came out of recurrent inference
+        # i.e. encoded_state is a true state, we pass it through the encoder first.
+        if self.use_encoder and encoded_state.shape[-1] != self.encoded_state_size and not self.learned_model:
+            encoded_state = self.representation_encoder(encoded_state.detach()).detach()
+
         policy = self.policy_network(encoded_state)
         if 'ensemble' in self.uncertainty_type:
             if self.use_prior:
@@ -285,10 +345,11 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
     def dynamics(self, encoded_state, reward_hidden, action):
         # Turn in a state_action vector
+        batch_size = encoded_state.shape[0]
         action_one_hot = (
             torch.zeros(
-                (
-                    encoded_state.shape[0],  # batch dimension
+                size=(
+                    batch_size,  # batch dimension
                     self.action_space_size
                 )
             )
@@ -296,8 +357,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             .float()
         )
         action_one_hot.scatter_(1, action.long(), 1.0)
-        flattened_state = encoded_state.reshape(-1, self.encoded_state_size)
-        x = torch.cat((flattened_state, action_one_hot), dim=1).detach()
+        flattened_state = encoded_state.reshape(batch_size, -1)
+        x = torch.cat((flattened_state, action_one_hot), dim=-1).detach()
         if self.learned_model:
             next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, reward_hidden)
         else:
@@ -357,7 +418,9 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             https://arxiv.org/pdf/1709.05380.pdf). The state is always detached, because we don't want the UBE
             prediction to train the learned dynamics and representation networks.
         """
-        state = state.reshape(-1, self.encoded_state_size).detach()
+        state = state.reshape(state.shape[0], -1).detach()
+        if self.use_encoder and not self.learned_model:
+            state = self.representation_encoder(state.detach()).detach()
         # We squeeze the result to return tensor of shape [B] instead of [B, 1]
         ube_prediction = self.ube_network(state).squeeze()
         # To guarantee that output value is positive, we treat it as a logit instead of as a direct scalar
@@ -375,7 +438,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         return itertools.chain(self.representation_network.parameters(),
                                self.policy_network.parameters(),
                                self.value_network.parameters(),
-                               self.dynamics_network.parameters(),
+                               self.dynamics_network.fc.parameters(),
+                               # self.dynamics_network.state_prediction.parameters(),
                                self.projection.parameters(),
                                self.projection_head.parameters(),
                                # self.ube_network.parameters(),
@@ -421,6 +485,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
                  fc_state_prediction_layers,
                  fc_state_prediction_prior_layers,
                  fc_reward_layers,
+                 fc_reward_prior_layers,
                  full_support_size,
                  lstm_hidden_size=64,
                  momentum=0.1,
@@ -430,6 +495,8 @@ class FullyConnectedDynamicsNetwork(nn.Module):
                  ensemble_size=5,
                  use_prior=True,
                  prior_scale=10.0,
+                 use_encoder=False,
+                 representation_encoder=None,
                  ):
         """
         Non-resnet, non-conv dynamics network, for deep_sea.
@@ -455,6 +522,8 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         self.use_prior = use_prior
         self.prior_scale = prior_scale
         self.state_prediction_net_prior = None
+        self.use_encoder = use_encoder
+        self.representation_encoder = representation_encoder
 
         # Init dynamics prediction, learned or given
         if learned_model:
@@ -475,7 +544,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
                                          momentum=momentum)
                                      for _ in range(ensemble_size)])
             if self.use_prior:
-                self.fc_net_prior = nn.ModuleList([mlp(dynamics_input_size, fc_reward_layers, full_support_size,
+                self.fc_net_prior = nn.ModuleList([mlp(dynamics_input_size, fc_reward_prior_layers, full_support_size,
                                                        init_zero=False, momentum=momentum)
                                                    for _ in range(ensemble_size)])
             self.lstm = None
@@ -488,10 +557,9 @@ class FullyConnectedDynamicsNetwork(nn.Module):
                           momentum=momentum)
 
     def forward(self, x, reward_hidden, current_state=None, action=None):
-        # Flatten input state-action for FC nets
-        x = x.view(-1, self.dynamics_input_size)
-
         if self.learned_model:
+            # Flatten input state-action for FC nets
+            x = x.view(-1, self.dynamics_input_size)
             # Next-state prediction is done based on a FC network
             next_state = self.state_prediction_net(x)
             # if self.use_prior:
@@ -501,9 +569,9 @@ class FullyConnectedDynamicsNetwork(nn.Module):
 
             # Reshape the state to the shape MuZero expects: [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
             next_state = next_state.reshape(-1,
-                                         self.hidden_state_shape[0],
-                                         self.hidden_state_shape[1],
-                                         self.hidden_state_shape[2])
+                                            self.hidden_state_shape[0],
+                                            self.hidden_state_shape[1],
+                                            self.hidden_state_shape[2])
 
         else:
             assert current_state is not None and action is not None, f"Cannot plan with true deep_sea model in " \
@@ -511,6 +579,28 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             # Produce next states from previous state and action, in the shape MuZero expects:
             # [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
             next_state = self.get_batched_next_states(current_state, action)
+
+        if self.use_encoder and not self.learned_model:
+            # Flatten current state
+            current_state = current_state.reshape(current_state.shape[0], -1)
+            encoded_state = self.representation_encoder(current_state.detach()).detach()
+            encoded_state_size = self.hidden_state_shape[0] * self.hidden_state_shape[1] * self.hidden_state_shape[2]
+            action_one_hot = (
+                torch.zeros(
+                    (
+                        encoded_state.shape[0],  # batch dimension
+                        self.dynamics_input_size - encoded_state_size    # Action space size
+                    )
+                )
+                .to(action.device)
+                .float()
+            )
+            action_one_hot.scatter_(1, action.long(), 1.0)
+            flattened_state = encoded_state.reshape(-1, encoded_state_size)
+            x = torch.cat((flattened_state, action_one_hot), dim=1).detach()
+        else:
+            # Flatten input state-action for FC nets
+            x = x.view(-1, self.dynamics_input_size)
 
         # Reward prediction is done based on EfficientExplore architecture, only if we don't use an ensemble.
         if self.ensemble:

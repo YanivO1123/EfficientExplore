@@ -117,6 +117,10 @@ class BaseNet(nn.Module):
         self.uncertainty_type = None
         # To be computed in uncertainty nets that use RND
         self.value_uncertainty_propagation_scale = None
+        # To be computed in uncertainty nets that use encoder
+        self.learned_model = None
+        self.use_encoder = None
+        self.representation_encoder = None
 
     def prediction(self, state):
         raise NotImplementedError

@@ -107,8 +107,8 @@ if __name__ == '__main__':
     parser.add_argument('--q_based_action_selection', action='store_true', default=False,
                         help="If true, uses select_q_based_action from utils instead of standard select_action."
                              "select_q_based_action computes action based on Q vals regularized by visitations.")
-    # parser.add_argument('--loss_uncertainty_weighting', action='store_true', default=False,
-    #                     help="If true, weigh the value losses with uncertainty.")
+    parser.add_argument('--learned_representation', action='store_true', default=False,
+                        help="Only applicable to deep_sea. If false, uses identity representation")
 
 
 

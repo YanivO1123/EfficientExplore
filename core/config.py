@@ -411,6 +411,7 @@ class BaseConfig(object):
         self.learned_model = True
         self.env_size = -1  # reset in set_game
         self.sampling_times = sampling_times
+        self.use_encoder = False
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -562,7 +563,11 @@ class BaseConfig(object):
                 self.plan_with_state_visits = args.plan_w_state_visits
             self.architecture_type = 'fully_connected'     # Only fully_connected is implemented for deep_sea
             self.learned_model = not args.alpha_zero_planning   # AlphaZero is only implemented in deep_sea
+            if not self.learned_model:
+                self.do_consistency = False # Consistency loss only makes sense with a learned model.
             self.deepsea_randomize_actions = not args.det_deepsea_actions
+            if args.learned_representation:
+                self.identity_representation = False
 
         # MuExplore:
         self.uncertainty_architecture_type = args.uncertainty_architecture_type

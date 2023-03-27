@@ -33,6 +33,8 @@ def consist_loss_func(f1, f2):
 
 def deep_sea_consistency_loss(prediction, target):
     # return -(target.detach() * prediction).sum(-1)
+    assert prediction.shape == target.shape, \
+        f"prediction.shape = {prediction.shape}, target.shape = {target.shape}, and should be equal"
     return torch.nn.functional.mse_loss(prediction, target.detach(), reduction='none').sum(dim=-1)
 
 
@@ -179,10 +181,10 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
         if config.amp_type == 'torch_amp':
             with autocast():
-                ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
+                ube_prediction = model.compute_ube_uncertainty(hidden_state)
                 ube_loss = config.ube_loss(ube_prediction, target_ube[:, 0])
         else:
-            ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
+            ube_prediction = model.compute_ube_uncertainty(hidden_state)
             ube_loss = config.ube_loss(ube_prediction, target_ube[:, 0])
     else:
         ube_loss = torch.zeros(batch_size)
@@ -207,12 +209,9 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     _, _, _, presentation_state, _, _, _ = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
                     # In deep sea, we use MSE between the true state and the learned state
                     if 'deep_sea' in config.env_name:
-                        flattened_hidden_state = hidden_state.reshape(-1, config.obs_shape[0] * config.obs_shape[1] *
-                                                                      config.obs_shape[2])
-                        flattened_presentation_state = presentation_state.reshape(-1, config.obs_shape[0] *
-                                                                                  config.obs_shape[1] *
-                                                                                  config.obs_shape[2]).detach()
-
+                        flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
+                        flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
+                                                                                  -1).detach()
                         temp_loss = deep_sea_consistency_loss(flattened_hidden_state, flattened_presentation_state) * \
                                     mask_batch[:, step_i]
                     else:
@@ -236,7 +235,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     previous_state = current_state
 
                 if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
-                    ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
+                    ube_prediction = model.compute_ube_uncertainty(hidden_state)
                     ube_loss += config.ube_loss(ube_prediction, target_ube[:, step_i + 1]) * mask_batch[:, step_i]
 
                 policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(1) * mask_batch[:, step_i]
@@ -290,11 +289,8 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 _, _, _, presentation_state, _, _, _ = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
                 # In deep sea, we use MSE between the true state and the learned state
                 if 'deep_sea' in config.env_name:
-                    flattened_hidden_state = hidden_state.reshape(-1, config.obs_shape[0] * config.obs_shape[1] *
-                                                                  config.obs_shape[2]).squeeze()
-                    flattened_presentation_state = presentation_state.reshape(-1, config.obs_shape[0] *
-                                                                              config.obs_shape[1] *
-                                                                              config.obs_shape[2]).detach()
+                    flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
+                    flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0], -1).detach()
                     temp_loss = deep_sea_consistency_loss(flattened_hidden_state, flattened_presentation_state) * \
                                 mask_batch[:, step_i]
                 else:
@@ -318,7 +314,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 previous_state = current_state
 
             if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
-                ube_prediction = model.compute_ube_uncertainty(hidden_state.detach())
+                ube_prediction = model.compute_ube_uncertainty(hidden_state)
                 ube_loss += config.ube_loss(ube_prediction, target_ube[:, step_i + 1]) * mask_batch[:, step_i]
 
             policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(1) * mask_batch[:, step_i]
@@ -485,6 +481,10 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             parameters = parameters + [
                 {'params': model.ube_network.parameters(), 'lr': config.lr_init}    # was 1E-03
             ]
+        if config.learned_model:
+            parameters = parameters + [
+                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': config.lr_init}
+            ]
         optimizer = optim.Adam(parameters, lr=config.lr_init)
     else:
         optimizer = optim.SGD(model.parameters(), lr=config.lr_init, momentum=config.momentum,
@@ -639,6 +639,7 @@ def train(config, summary_writer, model_path=None):
           f"use_max_value_targets = {config.use_max_value_targets} \n"
           f"use_max_policy_targets = {config.use_max_policy_targets} \n"
           f"Using learned model (MuZero): {config.learned_model}, or given dynamics model (Mu-AlphaZero): {not config.learned_model} \n"
+          f"Using random encoder: {config.use_encoder}"
           f"\n"
           
           f"Starting workers"
@@ -797,7 +798,7 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
 
         target_value_prefix, target_value, target_policy, target_ube = targets_batch
 
-        if training_step % config.reset_ube_interval == 0:
+        if training_step % config.reset_ube_interval == 0 and config.periodic_ube_weight_reset:
             visit_counter.s_counts = np.zeros(shape=visit_counter.observation_space_shape)
             visit_counter.sa_counts = np.zeros(shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
 
@@ -849,6 +850,7 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
 
                         if 'rnd' in config.uncertainty_architecture_type:
                             value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
+                        if 'ube' in config.uncertainty_architecture_type:
                             ube_predictions = model.compute_ube_uncertainty(hidden_states)
 
                         network_output_recur_left = model.recurrent_inference(hidden_states,
@@ -874,8 +876,8 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                         value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
                         reward_rnds_left = model.compute_reward_rnd_uncertainty(hidden_states, actions_left)
                         reward_rnds_right = model.compute_reward_rnd_uncertainty(hidden_states, actions_right)
-
-                    ube_predictions = model.compute_ube_uncertainty(hidden_states)
+                    if 'ube' in config.uncertainty_architecture_type:
+                        ube_predictions = model.compute_ube_uncertainty(hidden_states)
 
                     network_output_recur_left = model.recurrent_inference(hidden_states,
                                                                           (hidden_states_c_reward, hidden_states_h_reward),
