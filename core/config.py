@@ -88,11 +88,11 @@ class BaseConfig(object):
                  sampling_times: int = 0,
                  ube_td_steps: int = 5,
                  ube_loss_coeff: float = 2,
+                 ube_support: DiscreteSupport = DiscreteSupport(0, 300, delta=1),
                  count_based_ube: bool = False,
                  num_simulations_ube: int = 30,
                  reset_ube_interval: int = 1000 * 5,
                  rnd_scale: float = 1.0,
-                 # loss_uncertainty_weighting: bool = False,
                  ):
         """Base Config for EfficietnZero
         Parameters
@@ -250,13 +250,12 @@ class BaseConfig(object):
         ube_loss_coeff: float
             coefficient of ube loss. ube gradients do not flow into the model. However, we want UBE to learn "faster"
             than the value function, so we use coefficient that is larger than value coeff
+        ube_support: DiscreteSupport
+            support of ube to represent the ube scalars. Should be between 0 and max value
         count_based_ube: bool
             Whether to use visitation counts as target for UBE. Defaults to false.
         num_simulations_ube: int
             The number of simulations to use to compute ube targets in reanalyze when root_value is used.
-        loss_uncertainty_weighting: bool
-            If True, weigh the value targets with the uncertainty. Uncertainty -> 0, weight -> 1. Uncertainty -> inf,
-            weight -> 0.2.
         reset_ube_interval: int
             When step_count % config.reset_ube_interval == 0 reset the network parameters of UBE, to prevent
             failure to adapt to new uncertainty scores.
@@ -391,9 +390,6 @@ class BaseConfig(object):
         self.use_max_value_targets = use_max_value_targets
         self.use_max_policy_targets = use_max_policy_targets
 
-        # Uncertainty weighting of losses
-        # self.loss_uncertainty_weighting = loss_uncertainty_weighting
-
         # Action selection:
         self.standard_action_selection = True   # Set to false in set_config if not MuExplore and yes ube
 
@@ -405,6 +401,7 @@ class BaseConfig(object):
         self.reset_ube_interval = reset_ube_interval
         self.periodic_ube_weight_reset = False
         self.reset_all_weights = False
+        self.ube_support = ube_support
 
         # Deep sea for debugging
         self.deepsea_randomize_actions = True

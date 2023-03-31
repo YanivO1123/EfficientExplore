@@ -624,11 +624,14 @@ class EfficientExploreNet(EfficientZeroNet):
                  pred_out=256,
                  init_zero=False,
                  state_norm=False,
-                 ensemble_size=2,
+                 ensemble_size=5,
                  use_network_prior=True,
-                 prior_scale=10,
-                 uncertainty_type='ensemble',
-                 rnd_scale=1,
+                 prior_scale=5.0,
+                 uncertainty_type=None,
+                 rnd_scale=1.0,
+                 inverse_ube_transform=None,
+                 ube_support_size=None,
+                 discount=0.997,
                  ):
         super(EfficientExploreNet, self).__init__(
             observation_shape,
@@ -656,6 +659,7 @@ class EfficientExploreNet(EfficientZeroNet):
             state_norm=state_norm)
 
         self.uncertainty_type = uncertainty_type
+        self.value_uncertainty_propagation_scale = 1 / (1 - discount ** 2)
 
         block_output_size_reward = (
             (
@@ -687,7 +691,7 @@ class EfficientExploreNet(EfficientZeroNet):
             else (reduced_channels_policy * observation_shape[1] * observation_shape[2])
         )
 
-        if self.uncertainty_type == 'ensemble' or self.uncertainty_type == 'ensemble_ube':
+        if 'ensemble' in self.uncertainty_type:
             self.dynamics_network = EnsembleDynamicsNetwork(
                 num_blocks,
                 num_channels + 1,
@@ -720,43 +724,51 @@ class EfficientExploreNet(EfficientZeroNet):
                 use_network_prior=use_network_prior,
                 prior_scale=prior_scale,
             )
-        elif self.uncertainty_type == 'rnd' or self.uncertainty_type == 'rnd_ube':
-            self.input_size_value_rnd = (
-                (
-                        num_channels
-                        * math.ceil(observation_shape[1] / 16)
-                        * math.ceil(observation_shape[2] / 16)
-                )
-                if downsample
-                else (num_channels * observation_shape[1] * observation_shape[2])
-            )
-            self.input_size_reward_rnd = (
-                (
-                        (num_channels + 1)
-                        * math.ceil(observation_shape[1] / 16)
-                        * math.ceil(observation_shape[2] / 16)
-                )
-                if downsample
-                else ((num_channels + 1) * observation_shape[1] * observation_shape[2])
-            )
-            self.rnd_scale = rnd_scale
+        # elif self.uncertainty_type == 'rnd' or self.uncertainty_type == 'rnd_ube':
+        #     self.input_size_value_rnd = (
+        #         (
+        #                 num_channels
+        #                 * math.ceil(observation_shape[1] / 16)
+        #                 * math.ceil(observation_shape[2] / 16)
+        #         )
+        #         if downsample
+        #         else (num_channels * observation_shape[1] * observation_shape[2])
+        #     )
+        #     self.input_size_reward_rnd = (
+        #         (
+        #                 (num_channels + 1)
+        #                 * math.ceil(observation_shape[1] / 16)
+        #                 * math.ceil(observation_shape[2] / 16)
+        #         )
+        #         if downsample
+        #         else ((num_channels + 1) * observation_shape[1] * observation_shape[2])
+        #     )
+        #     self.rnd_scale = rnd_scale
+        #
+        #     # It's important that the RND nets are NOT initiated with zero
+        #     # Value-(state)-uncertainty-RND network:
+        #     self.value_rnd_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+        #                                  init_zero=False, momentum=bn_mt)
+        #     self.value_rnd_target_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+        #                                         init_zero=False, momentum=bn_mt)
+        #     # Reward-(state-action)-uncertainty-RND network:
+        #     self.reward_rnd_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+        #                                   init_zero=False, momentum=bn_mt)
+        #     self.reward_rnd_target_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+        #                                          init_zero=False, momentum=bn_mt)
 
-            # It's important that the RND nets are NOT initiated with zero
-            # Value-(state)-uncertainty-RND network:
-            self.value_rnd_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
-                                         init_zero=False, momentum=bn_mt)
-            self.value_rnd_target_network = mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
-                                                init_zero=False, momentum=bn_mt)
-            # Reward-(state-action)-uncertainty-RND network:
-            self.reward_rnd_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
-                                          init_zero=False, momentum=bn_mt)
-            self.reward_rnd_target_network = mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
-                                                 init_zero=False, momentum=bn_mt)
-
-        if self.uncertainty_type == 'ensemble_ube' or self.uncertainty_type == 'rnd_ube':
-            self.use_ube = True
-            self.ube_network = None
-            raise NotImplementedError
+        if 'ube' in self.uncertainty_type:
+            self.inverse_ube_transform = inverse_ube_transform
+            self.ube_network = UBENetwork(
+                self.prediction_network.resblocks,
+                num_channels,
+                reduced_channels_value,
+                fc_value_layers,
+                ube_support_size,
+                block_output_size_value,
+                momentum=bn_mt,
+                init_zero=self.init_zero,
+            )
 
     def ensemble_prediction_to_variance(self, logits):
         if not isinstance(logits, list):
@@ -780,10 +792,14 @@ class EfficientExploreNet(EfficientZeroNet):
 
             return scalar_variance
 
-    # TODO: Complete the UBE prediction computation
-    def ube(self, encoded_state, action):
-        # I need to decide if UBE takes encoded_state or encoded_state and action
-        return NotImplementedError
+    def compute_ube_uncertainty(self, state):
+        """
+            Returns the value-uncertainty prediction from the UBE network (See UBE paper
+            https://arxiv.org/pdf/1709.05380.pdf). The state is detached to prevent the UBE
+            prediction from training the learned dynamics and representation networks.
+        """
+        ube_prediction = self.ube_network(state.detach())
+        return ube_prediction
 
     def compute_value_rnd_uncertainty(self, state):
         state = state.reshape(-1, self.input_size_value_rnd).detach()
@@ -831,7 +847,7 @@ class EnsembleDynamicsNetwork(DynamicsNetwork):
             init_zero=False,
             ensemble_size=2,
             use_network_prior=True,
-            prior_scale=10,
+            prior_scale=10.0,
     ):
         """
             The EnsembleDynamicsNetwork shares the same architecture with the DynamicsNetwork, with the exception that
@@ -939,7 +955,7 @@ class EnsemblePredictionNetwork(PredictionNetwork):
             init_zero=False,
             ensemble_size=2,
             use_network_prior=True,
-            prior_scale=10,
+            prior_scale=10.0,
     ):
         """Ensembled Prediction network
         Parameters (additional to Prediction network)
@@ -969,15 +985,13 @@ class EnsemblePredictionNetwork(PredictionNetwork):
         self.ensemble_size = ensemble_size
         self.prior_scale = prior_scale
         self.use_network_prior = use_network_prior
-        # self.bn_value_nets = nn.ModuleList([nn.BatchNorm2d(reduced_channels_value, momentum=momentum) for _ in range(ensemble_size)])
-        # self.bn_value = None
         self.fc_value_nets = nn.ModuleList([mlp(self.block_output_size_value, fc_value_layers, full_support_size,
                                                 init_zero=init_zero, momentum=momentum) for _ in range(ensemble_size)])
         self.fc_value = None
 
         if self.use_network_prior:
             self.prior_fc_value_nets = nn.ModuleList([mlp(self.block_output_size_value, fc_value_layers,
-                                                          full_support_size, init_zero=init_zero, momentum=momentum) for
+                                                          full_support_size, init_zero=False, momentum=momentum) for
                                                       _ in range(ensemble_size)])
         else:
             self.prior_fc_value_nets = None
@@ -988,43 +1002,76 @@ class EnsemblePredictionNetwork(PredictionNetwork):
         """
         for block in self.resblocks:
             x = block(x)
-        value_after_conv = self.conv1x1_value(x)
-        # If the bn layers are not ensembled:
-        if self.bn_value is not None:
-            value = self.bn_value(value_after_conv)
-            value = nn.functional.relu(value)
-        else:
-            values = [bn_value_net(value_after_conv) for bn_value_net in self.bn_value_nets]
-            values = [nn.functional.relu(value) for value in values]
+        value = self.conv1x1_value(x)
+        value = self.bn_value(value)
+        value = nn.functional.relu(value)
 
         policy = self.conv1x1_policy(x)
         policy = self.bn_policy(policy)
         policy = nn.functional.relu(policy)
 
-        # If the bn layers are not ensembled:
-        if self.bn_value is not None:
-            value = value.view(-1, self.block_output_size_value)
-        else:
-            values = [value.view(-1, self.block_output_size_value) for value in values]
+        value = value.view(-1, self.block_output_size_value)
         policy = policy.view(-1, self.block_output_size_policy)
-
-        # If the bn layers are not ensembled:
-        if self.bn_value is not None:
-            if self.use_network_prior:
-                # This can also be done with torch.no_grad()
-                values = [fc_value_net(value) + self.prior_scale * prior_fc_value_net(value.detach()).detach() for
-                          fc_value_net, prior_fc_value_net in zip(self.fc_value_nets, self.prior_fc_value_nets)]
-            else:
-                values = [fc_value_net(value) for fc_value_net in self.fc_value_nets]
-        else:
-            if self.use_network_prior:
-                # This can also be done with torch.no_grad()
-                values = [fc_value_net(value) + self.prior_scale * prior_fc_value_net(value.detach()).detach() for
-                          fc_value_net, prior_fc_value_net, value in
-                          zip(self.fc_value_nets, self.prior_fc_value_nets, values)]
-            else:
-                values = [fc_value_net(value) for fc_value_net, value in zip(self.fc_value_nets, values)]
 
         policy = self.fc_policy(policy)
 
+        if self.use_network_prior:
+            values = [fc_value_net(value) + self.prior_scale * prior_fc_value_net(value.detach()).detach() for
+                      fc_value_net, prior_fc_value_net in zip(self.fc_value_nets, self.prior_fc_value_nets)]
+        else:
+            values = [fc_value_net(value) for fc_value_net in self.fc_value_nets]
+
         return policy, values
+
+class UBENetwork(nn.Module):
+    def __init__(
+            self,
+            shared_blocks,
+            num_channels,
+            reduced_channels_ube,
+            fc_layers,
+            full_support_size,
+            block_output_size_ube,
+            momentum=0.1,
+            init_zero=False,
+    ):
+        """UBE network
+        Parameters
+        ----------
+        shared_blocks: nn.ModuleList
+            The resblocks from the prediction network, that are shared by the UBE network.
+        num_channels: int
+            channels of hidden states
+        reduced_channels_ube: int
+            channels of ube
+        fc_layers: list
+            hidden layers of the ube prediction head (MLP head)
+        full_support_size: int
+            dim of value output
+        block_output_size_ube: int
+            dim of flatten hidden states
+        init_zero: bool
+            True -> zero initialization for the last layer of ube mlp
+        """
+        super().__init__()
+        self.resblocks = shared_blocks
+
+        self.conv1x1_ube = nn.Conv2d(num_channels, reduced_channels_ube, 1)
+        self.bn_ube = nn.BatchNorm2d(reduced_channels_ube, momentum=momentum)
+        self.block_output_size_ube = block_output_size_ube
+        self.fc_ube = mlp(self.block_output_size_ube, fc_layers, full_support_size, init_zero=init_zero,
+                            momentum=momentum)
+
+    def forward(self, x):
+        # The shared arch. with the prediction network can either be, or not be, trained through UBE
+        with torch.no_grad():
+            for block in self.resblocks:
+                x = block(x)
+
+        ube_prediction = self.conv1x1_ube(x)
+        ube_prediction = self.bn_ube(ube_prediction)
+        ube_prediction = nn.functional.relu(ube_prediction)
+        ube_prediction = ube_prediction.view(-1, self.block_output_size_ube)
+        ube_prediction = self.fc_ube(ube_prediction)
+
+        return ube_prediction

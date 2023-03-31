@@ -129,26 +129,33 @@ class DataWorker(object):
                                                        mapping_seed=self.config.seed,
                                                        fake=self.config.plan_with_fake_visit_counter,
                                                        randomize_actions=self.config.deepsea_randomize_actions)
+            previous_visitation_counts = np.zeros(shape=(self.config.env_size, self.config.env_size))
             print(f"Initiated visitation counter", flush=True)
-        def _get_max_entropy(action_space):
-            p = 1.0 / action_space
-            ep = - action_space * p * np.log2(p)
-            return ep
-        max_visit_entropy = _get_max_entropy(self.config.action_space_size)
-        # 100k benchmark
-        total_transitions = 0
-        # max transition to collect for this data worker
-        max_transitions = self.config.total_transitions // self.config.num_actors
 
-        # MuExplore: keep track of values and value uncertainties to debug beta
-        value_max, value_unc_max, value_min, value_unc_min, value_sum, value_unc_sum, value_unc_count = -math.inf, -math.inf, math.inf, math.inf, 0, 0, 0
-        previous_visitation_counts = np.zeros(shape=(self.config.env_size, self.config.env_size))
-        # To alternate random action selection or det. action selection in deep_sea
-        deterministic_deep_sea = False
-        # We change action selection in deepsea from random to det. every N = 1 batched episodes
-        flip_deep_sea_action_selection = 1 * self.config.env_size * self.config.p_mcts_num
-        # For q_value_based action selection
-        pb_c_init = self.config.pb_c_init
+        try:
+            def _get_max_entropy(action_space):
+                p = 1.0 / action_space
+                ep = - action_space * p * np.log2(p)
+                return ep
+            max_visit_entropy = _get_max_entropy(self.config.action_space_size)
+            # 100k benchmark
+            total_transitions = 0
+            # max transition to collect for this data worker
+            max_transitions = self.config.total_transitions // self.config.num_actors
+
+            # MuExplore: keep track of values and value uncertainties to debug beta
+            value_max, value_unc_max, value_min, value_unc_min, value_sum, value_unc_sum, value_unc_count = -math.inf, -math.inf, math.inf, math.inf, 0, 0, 0
+            # For q_value_based action selection
+            pb_c_init = self.config.pb_c_init
+            if 'deep_sea' in self.config.env_name:
+                # To alternate random action selection or det. action selection in deep_sea
+                deterministic_deep_sea = False
+                # We change action selection in deepsea from random to det. every N = 1 batched episodes
+                flip_deep_sea_action_selection = 1 * self.config.env_size * self.config.p_mcts_num
+        except:
+            traceback.print_exc()
+
+        print(f"Starting self-play loop", flush=True)
 
         try:
             with torch.no_grad():

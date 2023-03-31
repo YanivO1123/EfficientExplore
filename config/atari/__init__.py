@@ -69,11 +69,13 @@ class AtariConfig(BaseConfig):
             use_prior=True,
             prior_scale=10.0,
             # Exploration
-            mu_explore=True,
+            mu_explore=False,
             beta=0,
-            disable_policy_in_exploration = False,
+            disable_policy_in_exploration=False,
             # ratio of training / interactions
-            training_ratio = 1,
+            training_ratio=1,
+            # UBE params
+            ube_td_steps=5,
         )
         self.discount **= self.frame_skip
         self.max_moves //= self.frame_skip
@@ -95,6 +97,9 @@ class AtariConfig(BaseConfig):
         self.resnet_fc_policy_layers = [32]  # Define the hidden layers in the policy head of the prediction network
         self.resnet_fc_rnd_layers = [1024, 1024, 1024, 256]  # The last number is interpreted as outputsize
         self.downsample = True  # Downsample observations before representation network (See paper appendix Network Architecture)
+
+        # MuExplore parameters
+        self.categorical_ube = True
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         if self.change_temperature:
@@ -148,7 +153,11 @@ class AtariConfig(BaseConfig):
                 state_norm=self.state_norm,
                 ensemble_size=self.ensemble_size,
                 use_network_prior=self.use_prior,
-                prior_scale=self.prior_scale
+                prior_scale=self.prior_scale,
+                uncertainty_type=self.uncertainty_architecture_type,
+                rnd_scale=self.rnd_scale,
+                inverse_ube_transform=self.inverse_ube_transform,
+                ube_support_size=self.ube_support.size,
             )
         else:
             return EfficientZeroNet(
@@ -233,8 +242,16 @@ class AtariConfig(BaseConfig):
         scalar_loss = torch.mean(scalar_loss_tensor, dim=0)
         return scalar_loss
 
-    # TODO:
     def ube_loss(self, prediction, target):
-        return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
+        if self.categorical_ube:
+            return -(torch.log_softmax(prediction, dim=1) * target).sum(1)
+        else:
+            return torch.nn.functional.mse_loss(prediction, target, reduction='none')
+
+    def inverse_ube_transform(self, ube_logits):
+        return self.inverse_scalar_transform(ube_logits, self.ube_support)
+
+    def ube_phi(self, x):
+        return self._phi(x, self.ube_support.min, self.ube_support.max, self.ube_support.size)
 
 game_config = AtariConfig()

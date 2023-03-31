@@ -89,6 +89,7 @@ class DeepSeaConfig(BaseConfig):
             ube_td_steps=2,
             reset_ube_interval=5000,
             rnd_scale=0.1,
+            ube_support=DiscreteSupport(0, 10, delta=1),
         )
         self.start_transitions = max(1, self.start_transitions)
 
@@ -108,7 +109,7 @@ class DeepSeaConfig(BaseConfig):
         # UBE architecture
         self.fc_ube_layers = [128, 128, 128]
         self.categorical_ube = True
-        self.ube_support = DiscreteSupport(0, 10, delta=1)
+
         # RND architecture
         self.fc_rnd_layers = [1024, 256]
         self.fc_rnd_target_layers = [1024, 1024, 256]
