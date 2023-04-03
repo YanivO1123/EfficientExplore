@@ -338,7 +338,8 @@ class DataWorker(object):
                         reward_hidden_roots = network_output.reward_hidden
                         value_prefix_pool = network_output.value_prefix
                         policy_logits_pool = network_output.policy_logits.tolist()
-                        value_prefix_variance_pool = network_output.value_prefix_variance.tolist()
+                        value_prefix_variance_pool = (network_output.value_prefix_variance.tolist()
+                                                      if network_output.value_prefix_variance is not None else None)
 
                         noises = [
                             np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(

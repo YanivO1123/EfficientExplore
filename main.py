@@ -84,7 +84,7 @@ if __name__ == '__main__':
     parser.add_argument('--plan_w_state_visits', action='store_true', default=False,
                         help="If true uses state visits. Otherwise, will use state-action visits."
                              "Only relevant if uses p_w_vis_counter, ")
-    parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube', 'none'], default='ensemble_ube',
+    parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube', 'none'], default='none',
                         help="Decides the type of uncertainty to be used.")
     parser.add_argument('--number_of_exploratory_envs', type=int, default=None, help='If MuExplore, number of environments <= p_mcts_num that'
                                                                                      'are exploratory')

@@ -174,7 +174,7 @@ class BaseNet(nn.Module):
         """
         with torch.no_grad():
             # If no uncertainty mech. is used, we will return Nones
-            if 'none' in self.uncertainty_type:
+            if self.uncertainty_type is None or 'none' in self.uncertainty_type:
                 return None, None
             else:
                 batch_size = next_state.shape[0]

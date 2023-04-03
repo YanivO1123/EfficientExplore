@@ -13,7 +13,7 @@ class AtariConfig(BaseConfig):
         super(AtariConfig, self).__init__(
             training_steps=100000,
             last_steps=20000,
-            test_interval=5000, #10000,
+            test_interval=2000,     # 10000, 5000
             log_interval=1000,
             vis_interval=1000,
             test_episodes=32,
