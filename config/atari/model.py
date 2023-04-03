@@ -878,7 +878,7 @@ class EnsembleDynamicsNetwork(DynamicsNetwork):
 
         if self.use_network_prior:
             self.prior_fc_nets = nn.ModuleList(
-                [mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero, momentum=momentum)
+                [mlp(self.lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=False, momentum=momentum)
                  for _ in range(ensemble_size)])
         else:
             self.prior_fc_nets = None

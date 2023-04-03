@@ -237,7 +237,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                                                 for _ in range(ensemble_size)])
             if self.use_prior:
                 self.value_network_prior = nn.ModuleList([mlp(self.encoded_state_size, fc_value_prior_layers,
-                                                              value_support_size, init_zero=init_zero,
+                                                              value_support_size, init_zero=False,
                                                               momentum=momentum)
                                                           for _ in range(ensemble_size)])
         else:
