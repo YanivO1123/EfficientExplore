@@ -598,9 +598,8 @@ class BaseConfig(object):
             self.periodic_ube_weight_reset = args.periodic_ube_weight_reset
             self.count_based_ube = self.plan_with_visitation_counter
 
-        # loss_uncertainty_weighting can only be used with a source of uncertainty
-        # self.loss_uncertainty_weighting = args.loss_uncertainty_weighting and \
-        #                                   (args.visit_counter or args.uncertainty_architecture)
+        if args.prior_scale is not None:
+            self.prior_scale = args.prior_scale
 
         if not self.do_consistency:
             self.consistency_coeff = 0
