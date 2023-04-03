@@ -109,8 +109,9 @@ if __name__ == '__main__':
                              "select_q_based_action computes action based on Q vals regularized by visitations.")
     parser.add_argument('--learned_representation', action='store_true', default=False,
                         help="Only applicable to deep_sea. If false, uses identity representation")
-
-
+    parser.add_argument('--prior_scale', type=float, default=None,
+                        help='The scale of the prior, >= 0. If not specified, reverts to the prior specified in the '
+                             'config file.')
 
     # Process arguments
     args = parser.parse_args()
