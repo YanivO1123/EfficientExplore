@@ -86,6 +86,7 @@ def smoothed_statistics(xs, ys, bins=100, sem=False):
     # return hx, my, sy
     return hx[1:], my[1:], sy[1:] # this line for the negative reward experiments, to ignore false first entry in results
 
+
 def load_results(path, x_name=["num_played_steps.npy", "played_steps.npy", "played.npy"], y_name=["total_rewards.npy", "rewards.npy"]):
     """
         Loads the results for a specific experiment (for example, mountaincar exploratory counter uncertainty)
@@ -123,6 +124,73 @@ def load_results(path, x_name=["num_played_steps.npy", "played_steps.npy", "play
         experiment_results.append([ys, xs])
 
     return experiment_results
+
+
+def plot_heat_maps(s_counts, sa_counts=None, count_cap=None):
+    """
+    Plots a heatmap of the values in the table.
+    Parameters:
+        s_counts: np array of shape [H, W]
+        sa_counts: np array of shape [H, W, 2]
+        count_cap: the maximum count we want to present.
+    """
+    if count_cap is not None:
+        s_counts[s_counts > count_cap] = count_cap
+        if sa_counts is not None:
+            sa_counts[sa_counts > count_cap] = count_cap
+
+    # Define a color scheme with 10 distinct colors
+    fig, ax = plt.subplots()
+    im = ax.imshow(s_counts, cmap='plasma_r', vmin=-0.5, vmax=count_cap + 0.5 if count_cap is not None else 10.5)
+
+    # Set up the colorbar
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel("Count", rotation=-90, va="bottom")
+
+    # Set up the x and y axis labels
+    ax.set_xticks(np.arange(0, s_counts.shape[1], 5))
+    ax.set_yticks(np.arange(0, s_counts.shape[0], 5))
+    ax.set_xticklabels(np.arange(0, s_counts.shape[1], 5))
+    ax.set_yticklabels(np.arange(0, s_counts.shape[0], 5))
+
+    # Rotate the x-axis labels and set the title
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    ax.set_title("Heat Map of Counts")
+
+    # Loop over data dimensions and create text annotations.
+    # for i in range(s_counts.shape[0]):
+    #     for j in range(s_counts.shape[1]):
+    #         text = ax.text(j, i, s_counts[i, j],
+    #                        ha="center", va="center", color="w")
+
+
+def plot_scores_vs_counts(s_counts, scores, N, bucket_cap):
+    unique_counts = np.unique(s_counts)
+    count_buckets = np.arange(0, bucket_cap + 1, N)
+    bucket_scores = [[] for _ in range(len(count_buckets))]
+    for count in unique_counts:
+        count_score = scores[s_counts == count]
+        bucket_idx = min(int(count / bucket_cap * len(count_buckets)), len(count_buckets) - 1)
+        bucket_scores[bucket_idx].extend(count_score)
+
+    avg_scores = []
+    std_scores = []
+    for bucket in bucket_scores:
+        if len(bucket) > 0:
+            avg_score = np.mean(bucket)
+            std_score = np.std(bucket)
+            avg_scores.append(avg_score)
+            std_scores.append(std_score)
+        else:
+            avg_scores.append(0)
+            std_scores.append(0)
+
+    fig, ax = plt.subplots()
+    ax.scatter(count_buckets, avg_scores)
+    ax.errorbar(count_buckets, avg_scores, yerr=std_scores, fmt='none', capsize=5)
+    ax.set_xlabel('Counts')
+    ax.set_ylabel('Average Score')
+    ax.set_title('Average Score vs. Counts')
 
 # # Code to print the hexas and names of colors
 # for name, hex in mcolors.cnames.items():

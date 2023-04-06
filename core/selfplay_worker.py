@@ -427,12 +427,13 @@ class DataWorker(object):
                                 else:
                                     print(f"WARNING: Using select_q_based_action in exploration episodes WITHOUT either "
                                           f"MuExplore or UBE. If this is intended, message can be ignored.")
-                                action, visit_entropy = select_q_based_action(q_values, distributions, c=pb_c_init,
-                                                                              temperature=temperature,
-                                                                              deterministic=deterministic)
+                                _, visit_entropy = select_action(distributions, temperature=temperature,
+                                                                      deterministic=deterministic)
+                                action = np.argmax(q_values)
                             else:
                                 action, visit_entropy = select_action(distributions, temperature=temperature,
                                                                       deterministic=deterministic)
+
                             # MuExplore: Add state-action to visitation counter
                             if self.config.use_visitation_counter and i >= exploit_env_nums:
                                 # Take the last observation that was stored, and the current action
@@ -466,9 +467,10 @@ class DataWorker(object):
                                             , flush=True)
                                         previous_visitation_counts = copy.deepcopy(self.visitation_counter.s_counts)
                                         if self.config.mu_explore:
-                                            if self.config.learned_model and not self.config.use_encoder:
+                                            if self.config.learned_model and not self.config.use_encoder and \
+                                                    self.config.identity_representation:
                                                 self.debug_state_prediction(model)
-                                            if 'deep_sea/0' in self.config.env_name:
+                                            if 'deep_sea' in self.config.env_name and True:
                                                 self.debug_deep_sea(model)
                                 if self.config.mu_explore and total_transitions > 0:
                                     root_values_uncertainties = roots.get_values_uncertainty()
@@ -631,12 +633,13 @@ class DataWorker(object):
         """
            evaluates the results of MCTS over the diagonal of deep_sea/0
         """
-        # First, setup observation batches of shape (10, 1, 10, 10)
-        env_nums = 10
-        zero_obs = np.zeros(shape=(10, 10))
+        env_size = self.config.env_size
+        # First, setup observation batches of shape (env_size, 1, env_size, env_size)
+        env_nums = env_size # the length of the diagonal is the size of the environment
+        zero_obs = np.zeros(shape=(env_size, env_size))
         batched_obs = []
-        for i in range(10):
-            current_obs = np.zeros(shape=(10, 10))
+        for i in range(env_size):
+            current_obs = np.zeros(shape=(env_size, env_size))
             current_obs[i, i] = 1
             # if i == 0:
             #     stack_obs = np.stack([zero_obs, zero_obs, zero_obs, current_obs], axis=0)
@@ -683,15 +686,24 @@ class DataWorker(object):
                       policy_logits_pool)
 
         # Call MCTS:
-        MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots)
+        # We ONLY propagate uncertainty. What is the estimate at the root?
+        MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=False,
+                                 propagating_uncertainty=True)
         roots_distributions = roots.get_distributions()
         roots_values = roots.get_values()
         children_values = roots.get_roots_children_values(self.config.discount)
+        roots_uncertainties = roots.get_values_uncertainty()
+        children_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)
 
         # Print the results
-        for i in range(10):
+        print(f"in function debug_deep_sea, debugging the uncertainty of roots that ONLY do uncertainty prop.:",
+              flush=True)
+        for i in range(env_size):
             action_right = self.visitation_counter.identify_action_right(i, i)
-            print(f"At state {(i, i)}, root_value = {roots_values[i]}, prediction_value = {value_pool[i]} children_values = {children_values[i]} roots_distributions = {roots_distributions[i]}, action_right = {action_right}"
+            print(f"At state {(i, i)}, action_right = {action_right}. "
+                  f"children_uncertainties = {children_values[i]}, children_visitations = {roots_distributions[i]}"
+                  # f"root_value = {roots_values[i]}, prediction_value = {value_pool[i]} "
+                  # f"children_values = {children_values[i]} roots_distributions = {roots_distributions[i]}, "
                   , flush=True)
 
     def debug_state_prediction(self, model):
@@ -739,6 +751,7 @@ class DataWorker(object):
         flattened_batched_states_right = state_prediction_right.reshape(shape=(B, N * N))
         rows_right, columns_right = (flattened_batched_states_right.argmax(dim=1) // N).long().squeeze(), (
                 flattened_batched_states_right.argmax(dim=1) % N).long().squeeze()
+        print(f"In function debug_state_prediction in self_play. Printing state predictions:", flush=True)
         for i in range(self.config.env_size):
             print(f"({i}, {i}), action 0, predicted state: {rows_left[i].item(), columns_left[i].item()},"
                   f" expected ({i + 1}, _). "
@@ -748,7 +761,6 @@ class DataWorker(object):
                   f"and value at that index: {state_prediction_right[i, 0, rows_right[i], columns_right[i]]}"
                   , flush=True)
         # print(f"The complete state prediction for state (1, 1) and action 0: {state_prediction_left[1, 0, :, :]}")
-
 
     def debug_uncertainty(self, total_transitions, row, column, i, roots, action, distributions, value, deterministic):
         if i > (self.config.p_mcts_num - self.config.number_of_exploratory_envs) and self.config.mu_explore and 'deep_sea' in self.config.env_name \
@@ -788,3 +800,70 @@ class DataWorker(object):
                       f"Value is: {value} \n"
                       f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% \n"
                       , flush=True)
+
+    def evaluate_uncertainty(self, model, step_count):
+        """
+        The function computes the epistemic uncertainty associated with every state in the environment.
+        Only implemented for deep_sea.
+        """
+        print(f"In dataworker, in function evaluate_uncertainty, at transition {step_count}. Starting uncertainty "
+              f"evaluation for every state. {self.config.env_size * self.config.env_size} (parallel) MCTS calls.")
+        # init observations for each state
+        env_size = self.config.env_size
+        env_nums = self.config.p_mcts_num
+
+        batched_obs = []
+        for i in range(env_size):
+            for j in range(env_size):
+                current_obs = np.zeros(shape=(env_size, env_size))
+                current_obs[i, j] = 1
+                stack_obs = current_obs[np.newaxis, :]
+                batched_obs.append(stack_obs)
+        batched_obs = np.asarray(batched_obs)
+        stack_obs = torch.from_numpy(batched_obs).to(self.device).float()
+
+        # Call env_size * env_size MCTS in parallel.
+        if self.config.amp_type == 'torch_amp':
+            with autocast():
+                network_output = model.initial_inference(stack_obs.float())
+        else:
+            network_output = model.initial_inference(stack_obs.float())
+        hidden_state_roots = network_output.hidden_state
+        reward_hidden_roots = network_output.reward_hidden
+        value_prefix_pool = network_output.value_prefix
+        policy_logits_pool = network_output.policy_logits.tolist()
+        value_prefix_variance_pool = network_output.value_prefix_variance
+        value_pool = network_output.value
+        noises = [
+            np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
+                np.float32).tolist() for _ in range(env_nums)]
+        # Disable policy prior in exploration
+        if self.config.disable_policy_in_exploration:
+            policy_logits_pool = [np.ones_like(policy_logits_pool[0]).tolist()
+                                  for _ in range(len(policy_logits_pool))]
+
+        # Init Exploratory CRoots and prepare them exploratorily
+        roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations,
+                             self.config.beta, self.config.number_of_exploratory_envs)
+        roots.prepare_explore(self.config.root_exploration_fraction, noises, value_prefix_pool,
+                              policy_logits_pool, value_prefix_variance_pool, self.config.beta,
+                              self.config.number_of_exploratory_envs)
+
+        # Call MCTS:
+        # We ONLY propagate uncertainty. What is the estimate at the root?
+        MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=True)
+        roots_distributions = roots.get_distributions()
+        # roots_values = roots.get_values()
+        # children_values = roots.get_roots_children_values(self.config.discount)
+        roots_uncertainties = roots.get_values_uncertainty()
+        children_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)
+
+        state_uncertainties = np.asarray(roots_uncertainties).reshape(env_size, env_size)
+        state_action_uncertainties = np.asarray(children_uncertainties).reshape(env_size, env_size,
+                                                                                self.config.action_space_size)
+
+        # save the uncertainties.
+        np.save(self.config.exp_path + f"/state_uncertainties_transition_{step_count}", state_uncertainties)
+        np.save(self.config.exp_path + f"/state_action_uncertainties_transition_{step_count}", state_action_uncertainties)
+        print(f"In dataworker, in function evaluate_uncertainty, at transition {step_count}. Finished uncertainty "
+              f"evaluation!")

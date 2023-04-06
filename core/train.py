@@ -21,6 +21,8 @@ from core.utils import weight_reset, uncertainty_to_loss_weight, prepare_observa
 from core.visitation_counter import CountUncertainty
 import traceback
 
+from core.model import concat_output_reward_variance, concat_output_value_variance
+
 
 def consist_loss_func(f1, f2):
     """Consistency loss function: similarity loss
@@ -486,7 +488,7 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             ]
         if config.learned_model:
             parameters = parameters + [
-                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': config.lr_init}
+                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': config.lr_init * 0.5}
             ]
         optimizer = optim.Adam(parameters, lr=config.lr_init)
     else:
@@ -568,6 +570,8 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             try:
                 debug_uncertainty(model=model, config=config, training_step=step_count, device=config.device,
                                   visit_counter=visit_counter, batch=batch)
+                debug_unrolled_uncertainty(config=config, model=model, visitation_counter=visit_counter,
+                                           training_step=step_count)
             except:
                 traceback.print_exc()
             model.train()
@@ -805,8 +809,8 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
             visit_counter.s_counts = np.zeros(shape=visit_counter.observation_space_shape)
             visit_counter.sa_counts = np.zeros(shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
 
-        if training_step % 50 == 0:
-            # Setup observations for every state in the 10 by 10 deep_sea
+        if training_step % config.test_interval == 0:
+            # Setup observations for every state in the env_size by env_size deep_sea
             num_columns = env_size
             num_rows = env_size
             batched_obs = []
@@ -903,8 +907,6 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                 final_value_uncertainty_prediction.append(network_output_init.value_variance)
                 row_ube_predictions.append(ube_predictions)
 
-
-
             if 'rnd' in config.uncertainty_architecture_type:
                 row_value_rnds = torch.stack(row_value_rnds, dim=0)
                 row_reward_rnds_left = torch.stack(row_reward_rnds_left, dim=0)
@@ -924,10 +926,16 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                   f"In function train. At training step {training_step}, debug-prints for uncertainty.")
             print(f"Printing state counts: \n"
                   f"{visit_counter.s_counts} \n"
+                  f"Printing last row s_a counts: \n"
+                  f"{visit_counter.sa_counts[-1]} \n"
                   f"Total value uncertainty prediction for states (including UBE): \n"
                   f"{final_value_uncertainty_prediction} \n"
-                  f"Local value uncertainty prediction for states (excluding UBE): \n"
-                  f"{local_uncertainty_prediction} \n"
+                  f"Reward uncertainty for action 1: \n"
+                  f"{recurrent_inf_reward_unc_prediction_right} \n"
+                  f"Reward uncertainty for action 0, last row: \n"
+                  f"{recurrent_inf_reward_unc_prediction_left[-2]} \n"
+                  # f"Local value uncertainty prediction for states (excluding UBE): \n"
+                  # f"{local_uncertainty_prediction} \n"
                   , flush=True)
             # print(f"Value RND scores for states: \n"
             #       f"{row_value_rnds}", flush=True)
@@ -965,3 +973,128 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
             action = actions[i]
             visit_counter.observe(observation, action)
     model.train()
+
+
+def debug_unrolled_uncertainty(config, visitation_counter, model, training_step):
+    """
+        This function compares the uncertainty from unrolling 5 steps from a certain state on the
+        diagonal (starting_index_row, starting_index_col), in two different trajectories.
+        One trajectory unrolls only correct-right, and the other unrolls only 0 actions.
+        Only implemented for deep_sea.
+    """
+    if training_step % config.test_interval == 0:
+        model.eval()
+        device = config.device
+        env_size = config.env_size
+        planning_horizon = 5
+        num_trajectories = env_size - planning_horizon - 1
+
+        assert num_trajectories < env_size, planning_horizon < env_size + num_trajectories
+
+        # Setup num_trajectories starting observations for states along the diagonal
+        batched_obs = []
+        for i in range(num_trajectories):
+            current_obs = np.zeros(shape=(env_size, env_size))
+            current_obs[i, i] = 1
+            current_obs = current_obs[np.newaxis, :]
+            batched_obs.append(current_obs)
+        stack_obs = prepare_observation_lst(batched_obs)
+        stack_obs = torch.from_numpy(stack_obs).to(config.device)
+        assert stack_obs.shape == (num_trajectories, 1, env_size, env_size)
+
+        # Setup actions for true right and only zero trajectories
+        true_right_actions = np.zeros(shape=(planning_horizon, num_trajectories))    # Actions will be an array of shape [planning_horizon, num_trajectories, 1]
+        true_left_actions = np.zeros(shape=(planning_horizon, num_trajectories))
+        for trajectory in range(num_trajectories):  # For each batched trajectory
+            for unroll_step in range(planning_horizon):   # for each unroll step
+                row, column = trajectory + unroll_step, trajectory + unroll_step
+                action_right = visitation_counter.identify_action_right(row, column)
+                row, column = trajectory + unroll_step, np.clip(trajectory - unroll_step, a_min=0, a_max=trajectory + 1)
+                action_left = visitation_counter.identify_action_right(row, column)
+                true_right_actions[unroll_step, trajectory] = action_right
+                true_left_actions[unroll_step, trajectory] = 1 - action_left
+        true_right_actions = torch.from_numpy(true_right_actions).to(config.device).long().unsqueeze(-1)
+        true_left_actions = torch.from_numpy(true_left_actions).to(config.device).long().unsqueeze(-1)
+
+        network_outputs_left = []
+        network_outputs_right = []
+
+        # plan / unroll for all batched_trajectories, twice in parallel along both action trajectories:
+        network_output_init = model.initial_inference(stack_obs.float())
+        hidden_states_l = torch.from_numpy(network_output_init.hidden_state).float().to(device)
+        hidden_reward_c_l = torch.from_numpy(network_output_init.reward_hidden[0]).float().to(device)
+        hidden_reward_h_l = torch.from_numpy(network_output_init.reward_hidden[1]).float().to(device)
+        hidden_states_r = torch.from_numpy(network_output_init.hidden_state).float().to(device)
+        hidden_reward_c_r = torch.from_numpy(network_output_init.reward_hidden[0]).float().to(device)
+        hidden_reward_h_r = torch.from_numpy(network_output_init.reward_hidden[1]).float().to(device)
+
+        # network_outputs_left.append(network_output_init)
+        # network_outputs_right.append(network_output_init)
+
+        for unroll_step in range(planning_horizon):
+            actions_left = true_left_actions[unroll_step]
+            actions_right = true_right_actions[unroll_step]
+            # do one recurrent inference step
+            network_output_recur_left = model.recurrent_inference(hidden_states_l,
+                                                                  (hidden_reward_c_l, hidden_reward_h_l),
+                                                                  actions_left)
+            network_output_recur_right = model.recurrent_inference(hidden_states_r,
+                                                                   (hidden_reward_c_r, hidden_reward_h_r),
+                                                                   actions_right)
+            # Store the results
+            network_outputs_left.append(network_output_recur_left)
+            network_outputs_right.append(network_output_recur_right)
+            # Setup the new hidden states and hidden_rewards
+            hidden_states_l = torch.from_numpy(network_output_recur_left.hidden_state).float().to(device)
+            hidden_reward_c_l = torch.from_numpy(network_output_recur_left.reward_hidden[0]).float().to(device)
+            hidden_reward_h_l = torch.from_numpy(network_output_recur_left.reward_hidden[1]).float().to(device)
+            hidden_states_r = torch.from_numpy(network_output_recur_right.hidden_state).float().to(device)
+            hidden_reward_c_r = torch.from_numpy(network_output_recur_right.reward_hidden[0]).float().to(device)
+            hidden_reward_h_r = torch.from_numpy(network_output_recur_right.reward_hidden[1]).float().to(device)
+
+        # Evaluate results
+
+        reward_unc_left = []
+        value_unc_left = []
+        reward_unc_right = []
+        value_unc_right = []
+        for unroll_step in range(planning_horizon):
+            reward_unc_left.append(network_outputs_left[unroll_step].value_prefix_variance)
+            value_unc_left.append(network_outputs_left[unroll_step].value_variance)
+            reward_unc_right.append(network_outputs_right[unroll_step].value_prefix_variance)
+            value_unc_right.append(network_outputs_right[unroll_step].value_variance)
+
+        reward_unc_left = torch.from_numpy(np.stack(reward_unc_left))
+        value_unc_left = torch.from_numpy(np.stack(value_unc_left))
+        reward_unc_right = torch.from_numpy(np.stack(reward_unc_right))
+        value_unc_right = torch.from_numpy(np.stack(value_unc_right))
+
+        assert reward_unc_left.shape == value_unc_left.shape == reward_unc_right.shape == value_unc_right.shape == \
+               (planning_horizon, num_trajectories), f"reward_unc_left.shape = {reward_unc_left.shape}, " \
+                                                     f"value_unc_left.shape = {value_unc_left.shape}, " \
+                                                     f"reward_unc_right.shape = {reward_unc_right.shape}, " \
+                                                     f"value_unc_right.shape = {value_unc_right.shape}, " \
+                                                     f"(planning_horizon, num_trajectories) = " \
+                                                     f"{(planning_horizon, num_trajectories)}"
+
+        # assuming gamma = 1
+        propagated_value_unc_l = reward_unc_left.sum(dim=0) + value_unc_left[-1]
+        propagated_value_unc_r = reward_unc_right.sum(dim=0) + value_unc_right[-1]
+
+        assert propagated_value_unc_l.shape == propagated_value_unc_r.shape and len(propagated_value_unc_r.shape) == 1 \
+               and propagated_value_unc_r.shape[0] == num_trajectories
+
+        # Evaluation:
+        print(f"In function debug_unrolled_uncertainty in train. training_step = {training_step}. "
+              f"Evaluation-planning-horizon = {planning_horizon}", flush=True)
+        for i in range(num_trajectories):
+            print(f"At state: {(i, i)}. proped_value_unc_left = {propagated_value_unc_l[i]}, "
+                  f"proped_value_unc_right = {propagated_value_unc_r[i]}. \n"
+                  f"reward_unc_left = {reward_unc_left[:, i]}, \n"
+                  f"reward_unc_right = {reward_unc_right[:, i]} \n"
+                  f"value_unc_left = {value_unc_left[:, i]}, \n"
+                  f"value_unc_right = {value_unc_right[:, i]} \n"
+                  f"Expecting: unc_r > unc_l, reward_unc_r > reward_unc_l. value_unc_right > value_unc_left.",
+                  flush=True)
+
+        model.train()

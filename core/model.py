@@ -54,7 +54,7 @@ def concat_output_reward_variance(output_lst):
 def concat_output(output_lst):
     # concat the model output
     value_lst, reward_lst, policy_logits_lst, hidden_state_lst = [], [], [], []
-    reward_hidden_c_lst, reward_hidden_h_lst =[], []
+    reward_hidden_c_lst, reward_hidden_h_lst = [], []
     for output in output_lst:
         value_lst.append(output.value)
         reward_lst.append(output.value_prefix)
@@ -93,7 +93,9 @@ def concat_uncertainty_output(output_lst):
     reward_hidden_c_lst = np.expand_dims(np.concatenate(reward_hidden_c_lst), axis=0)
     reward_hidden_h_lst = np.expand_dims(np.concatenate(reward_hidden_h_lst), axis=0)
 
-    return value_variance_lst, reward_variance_lst, policy_logits_lst, hidden_state_lst, (reward_hidden_c_lst, reward_hidden_h_lst)
+    return value_variance_lst, reward_variance_lst, policy_logits_lst, hidden_state_lst, (
+        reward_hidden_c_lst, reward_hidden_h_lst)
+
 
 class BaseNet(nn.Module):
     def __init__(self, inverse_value_transform, inverse_reward_transform, lstm_hidden_size):
@@ -198,7 +200,9 @@ class BaseNet(nn.Module):
                         # Compute reward-unc. as epistemic unc. associated with NEXT state as well as transition
                         # (previous state + action)
                         value_prefix_variance = self.compute_reward_rnd_uncertainty(previous_state, action)
-
+                # Cap local uncertainty at 1
+                # value_prefix_variance = torch.minimum(value_prefix_variance, torch.ones_like(value_prefix_variance)
+                #                                       .to(value_prefix_variance.device))
                 # We compute the local uncertainty in the value of next state as the sum of next_state_based_uncertainty
                 # (value_uncertainty) and previous-state-and-action uncertainty (value_prefix_uncertainty).
                 if value_prefix_variance is not None and value_variance is not None:
@@ -219,7 +223,12 @@ class BaseNet(nn.Module):
                             f"ube_prediction.shape = {ube_prediction.shape}, " \
                             f"value_variance.shape = {value_variance.shape}, and should be equal." \
                             f"Expecting ({next_state.shape[0]})"
-                    value_variance = self.value_uncertainty_propagation_scale * value_variance + ube_prediction
+                    value_variance = torch.maximum(self.value_uncertainty_propagation_scale * value_variance,
+                                                   ube_prediction.abs())
+                    # Upper bound the propagated value and compute:
+                    # certainty * ube_prediction + uncertainty * propagation scale
+                    # value_variance = value_prefix_variance * self.value_uncertainty_propagation_scale + \
+                    #                  (1 - value_prefix_variance) * ube_prediction.abs()
 
                 return value_variance.cpu().numpy(), value_prefix_variance.cpu().numpy()
 
@@ -242,9 +251,11 @@ class BaseNet(nn.Module):
                              torch.zeros(1, num, self.lstm_hidden_size).detach().cpu().numpy())
         else:
             # zero initialization for reward (value prefix) hidden states
-            reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).to('cuda'), torch.zeros(1, num, self.lstm_hidden_size).to('cuda'))
+            reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).to('cuda'),
+                             torch.zeros(1, num, self.lstm_hidden_size).to('cuda'))
 
-        return NetworkOutput(value, [0. for _ in range(num)], actor_logit, state, reward_hidden, value_variance, value_prefix_variance)
+        return NetworkOutput(value, [0. for _ in range(num)], actor_logit, state, reward_hidden, value_variance,
+                             value_prefix_variance)
 
     def recurrent_inference(self, hidden_state, reward_hidden, action) -> NetworkOutput:
         state, reward_hidden, value_prefix = self.dynamics(hidden_state, reward_hidden, action)
@@ -265,7 +276,8 @@ class BaseNet(nn.Module):
             reward_hidden = (reward_hidden[0].detach().cpu().numpy(), reward_hidden[1].detach().cpu().numpy())
             actor_logit = actor_logit.detach().cpu().numpy()
 
-        return NetworkOutput(value, value_prefix, actor_logit, state, reward_hidden, value_variance, value_prefix_variance)
+        return NetworkOutput(value, value_prefix, actor_logit, state, reward_hidden, value_variance,
+                             value_prefix_variance)
 
     def get_weights(self):
         return {k: v.cpu() for k, v in self.state_dict().items()}
@@ -285,6 +297,7 @@ class BaseNet(nn.Module):
             if g is not None:
                 p.grad = torch.from_numpy(g)
 
+
 def renormalize(tensor, first_dim=1):
     # normalize the tensor (states)
     if first_dim < 0:
@@ -295,4 +308,3 @@ def renormalize(tensor, first_dim=1):
     flat_tensor = (flat_tensor - min) / (max - min)
 
     return flat_tensor.view(*tensor.shape)
-

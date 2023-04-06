@@ -304,7 +304,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             else:
                 # We don't initialize ube with zeros because we don't want to penalize the uncertainty of unobserved states
                 self.ube_network = no_batch_norm_mlp(self.encoded_state_size, fc_ube_layers, 1,
-                                                     init_zero=False)  # , momentum=momentum)
+                                                     init_zero=init_zero)  # , momentum=momentum)
 
     def representation(self, observation):
         # Regardless of the number of stacked observations, we only pass the last
@@ -326,7 +326,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                 encoded_state = encoded_state.reshape(encoded_state.shape[0], 1, self.encoding_size, self.encoding_size)
             elif self.learned_model:
                 # Rescale the states to make them easier to learn with the MSE-based consistency loss.
-                encoded_state = encoded_state * 10
+                encoded_state = encoded_state * 20
         else:
             batch_size = observation.shape[0]
             observation = observation.reshape(observation.shape[0], -1)
@@ -337,7 +337,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
     def prediction(self, encoded_state):
         # We reshape the encoded_state to the shape of input of the FC nets that follow
-        encoded_state = encoded_state.reshape(encoded_state.shape[0], -1)
+        encoded_state = encoded_state.reshape(encoded_state.shape[0], -1).detach()
 
         # If we use an encoder, we plan with the true model, and this call came out of recurrent inference
         # i.e. encoded_state is a true state, we pass it through the encoder first.
@@ -618,6 +618,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
 
         # Reward prediction is done based on EfficientExplore architecture, only if we don't use an ensemble.
         if self.ensemble:
+            x = x.detach()
             if self.use_prior:
                 value_prefix = [value_prefix_net(x) + self.prior_scale *
                                 prior_net(x.detach()).detach() for value_prefix_net, prior_net
