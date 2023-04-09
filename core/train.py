@@ -16,7 +16,7 @@ from core.replay_buffer import ReplayBuffer
 from core.storage import SharedStorage, QueueStorage
 from core.selfplay_worker import DataWorker
 from core.reanalyze_worker import BatchWorker_GPU, BatchWorker_CPU
-from core.utils import weight_reset, uncertainty_to_loss_weight, prepare_observation_lst
+from core.utils import weight_reset, uncertainty_to_loss_weight, prepare_observation_lst, init_kaiming_trunc_haiku
 
 from core.visitation_counter import CountUncertainty
 import traceback
@@ -175,6 +175,10 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     value_prefix_loss = torch.zeros(batch_size, device=config.device)
     consistency_loss = torch.zeros(batch_size, device=config.device)
 
+    if 'deep_sea' in config.env_name and config.representation_based_training:
+        correct_hidden_state = hidden_state
+        previous_reward_hidden = reward_hidden
+
     # value RND loss:
     if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
         rnd_loss = get_rnd_loss(model, hidden_state, batch_size, config.device)
@@ -227,6 +231,14 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
                     other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                     consistency_loss += temp_loss
+
+                    # TODO: This changes MuZero training from reward/value loss based dynamics to representation based
+                    #  reward/value
+                    if 'deep_sea' in config.env_name and config.representation_based_training:
+                        value, value_prefix, policy_logits, _, reward_hidden, _, _ = model.recurrent_inference(
+                            correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
+                        correct_hidden_state = presentation_state
+                        previous_reward_hidden = reward_hidden
 
                 if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                     action = action_batch[:, step_i]
@@ -306,6 +318,14 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
                 other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                 consistency_loss += temp_loss
+
+                # TODO: This changes MuZero training from reward/value loss based dynamics to representation based
+                #  reward/value
+                if 'deep_sea' in config.env_name and config.representation_based_training:
+                    value, value_prefix, policy_logits, _, reward_hidden, _, _ = model.recurrent_inference(
+                        correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
+                    correct_hidden_state = presentation_state
+                    previous_reward_hidden = reward_hidden
 
             if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                 action = action_batch[:, step_i]
@@ -488,7 +508,7 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             ]
         if config.learned_model:
             parameters = parameters + [
-                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': config.lr_init * 0.5}
+                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': 1E-02 * 0.5}
             ]
         optimizer = optim.Adam(parameters, lr=config.lr_init)
     else:
@@ -548,8 +568,15 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
 
         # Periodically reset ube weights
         if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval * reset_index == 0:
-            reset_index += 1
-            reset_weights(model, config, step_count)
+            reset_index = 1
+            try:
+                if 'deep_sea' in config.env_name:
+                    visit_counter.s_counts = np.zeros(shape=visit_counter.observation_space_shape)
+                    visit_counter.sa_counts = np.zeros(
+                        shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
+                reset_weights(model, config, step_count)
+            except:
+                traceback.print_exc()
 
         # update model for self-play
         if step_count % config.checkpoint_interval == 0:
@@ -770,27 +797,45 @@ def get_rnd_loss(model, next_state, batch_size, device, previous_state=None, act
 def reset_weights(model, config, step_count):
     if config.reset_all_weights:
         model.apply(fn=weight_reset)
-    if 'ube' in config.uncertainty_architecture_type:
-        model.ube_network.apply(fn=weight_reset)
         print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
-              f"ube_network has been reset, at training step: {step_count}\n"
+              f"All weights have been reset: {step_count}\n"
               f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
               , flush=True)
-    if 'rnd' in config.uncertainty_architecture_type:
-        model.reward_rnd_network.apply(fn=weight_reset)
-        model.reward_rnd_target_network.apply(fn=weight_reset)
-        model.value_rnd_network.apply(fn=weight_reset)
-        model.value_rnd_target_network.apply(fn=weight_reset)
-        for p in model.value_rnd_target_network.parameters():
-            with torch.no_grad():
-                p *= 4
-        for p in model.reward_rnd_target_network.parameters():
-            with torch.no_grad():
-                p *= 4
-        print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
-              f"both rnd networks have been reset, at training step: {step_count} \n"
-              f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
-              , flush=True)
+        if not config.learned_model:
+            model.dynamics_network.fc.apply(fn=init_kaiming_trunc_haiku)
+            model.value_network.apply(fn=init_kaiming_trunc_haiku)
+        if config.use_prior:
+            if not config.learned_model:
+                model.dynamics_network.fc_net_prior.apply(fn=init_kaiming_trunc_haiku)
+                model.value_network_prior.apply(fn=init_kaiming_trunc_haiku)
+            for p in model.dynamics_network.fc_net_prior.parameters():
+                p.requires_grad = False
+                p *= 2
+            for p in model.value_network_prior.parameters():
+                p.requires_grad = False
+                p *= 2
+    else:
+        if 'ube' in config.uncertainty_architecture_type:
+            model.ube_network.apply(fn=weight_reset)
+            print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+                  f"ube_network has been reset, at training step: {step_count}\n"
+                  f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+                  , flush=True)
+        if 'rnd' in config.uncertainty_architecture_type:
+            model.reward_rnd_network.apply(fn=weight_reset)
+            model.reward_rnd_target_network.apply(fn=weight_reset)
+            model.value_rnd_network.apply(fn=weight_reset)
+            model.value_rnd_target_network.apply(fn=weight_reset)
+            for p in model.value_rnd_target_network.parameters():
+                with torch.no_grad():
+                    p *= 4
+            for p in model.reward_rnd_target_network.parameters():
+                with torch.no_grad():
+                    p *= 4
+            print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+                  f"both rnd networks have been reset, at training step: {step_count} \n"
+                  f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+                  , flush=True)
 
 
 def debug_uncertainty(model, config, training_step, device, visit_counter, batch):
@@ -987,7 +1032,7 @@ def debug_unrolled_uncertainty(config, visitation_counter, model, training_step)
         device = config.device
         env_size = config.env_size
         planning_horizon = 5
-        num_trajectories = env_size - planning_horizon - 1
+        num_trajectories = env_size - planning_horizon
 
         assert num_trajectories < env_size, planning_horizon < env_size + num_trajectories
 
@@ -1053,21 +1098,28 @@ def debug_unrolled_uncertainty(config, visitation_counter, model, training_step)
             hidden_reward_h_r = torch.from_numpy(network_output_recur_right.reward_hidden[1]).float().to(device)
 
         # Evaluate results
-
         reward_unc_left = []
         value_unc_left = []
         reward_unc_right = []
         value_unc_right = []
+        state_prediction_right = []
+        state_prediction_left = []
+
         for unroll_step in range(planning_horizon):
             reward_unc_left.append(network_outputs_left[unroll_step].value_prefix_variance)
             value_unc_left.append(network_outputs_left[unroll_step].value_variance)
+            state_prediction_left.append(network_outputs_left[unroll_step].hidden_state)
             reward_unc_right.append(network_outputs_right[unroll_step].value_prefix_variance)
             value_unc_right.append(network_outputs_right[unroll_step].value_variance)
+            state_prediction_right.append(network_outputs_right[unroll_step].hidden_state)
 
         reward_unc_left = torch.from_numpy(np.stack(reward_unc_left))
         value_unc_left = torch.from_numpy(np.stack(value_unc_left))
+        state_prediction_left = torch.from_numpy(np.stack(state_prediction_left))   # expected shape [planning_horizon, num_trajectories, env_size, env_size]
+
         reward_unc_right = torch.from_numpy(np.stack(reward_unc_right))
         value_unc_right = torch.from_numpy(np.stack(value_unc_right))
+        state_prediction_right = torch.from_numpy(np.stack(state_prediction_right))
 
         assert reward_unc_left.shape == value_unc_left.shape == reward_unc_right.shape == value_unc_right.shape == \
                (planning_horizon, num_trajectories), f"reward_unc_left.shape = {reward_unc_left.shape}, " \
@@ -1076,6 +1128,12 @@ def debug_unrolled_uncertainty(config, visitation_counter, model, training_step)
                                                      f"value_unc_right.shape = {value_unc_right.shape}, " \
                                                      f"(planning_horizon, num_trajectories) = " \
                                                      f"{(planning_horizon, num_trajectories)}"
+        assert state_prediction_right.shape == state_prediction_left.shape == (planning_horizon, num_trajectories, 1,
+                                                                               env_size, env_size), \
+            f"state_prediction_right.shape = {state_prediction_right.shape}, state_prediction_left.shape = " \
+            f"{state_prediction_left.shape}, \n " \
+            f"(planning_horizon, num_trajectories, env_size, env_size) = " \
+            f"{(planning_horizon, num_trajectories, env_size, env_size)}"
 
         # assuming gamma = 1
         propagated_value_unc_l = reward_unc_left.sum(dim=0) + value_unc_left[-1]

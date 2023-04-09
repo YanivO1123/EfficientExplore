@@ -409,6 +409,7 @@ class BaseConfig(object):
         self.env_size = -1  # reset in set_game
         self.sampling_times = sampling_times
         self.use_encoder = False
+        self.representation_based_training = False
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -525,6 +526,7 @@ class BaseConfig(object):
             self.ensemble_size = 5
             if args.case == 'deep_sea':
                 self.ensemble_size = 10
+                self.batch_size = 256
                 # self.proj_hid = 1024
                 # self.proj_out = 1024
                 # self.pred_hid = 512
@@ -565,6 +567,9 @@ class BaseConfig(object):
             self.deepsea_randomize_actions = not args.det_deepsea_actions
             if args.learned_representation:
                 self.identity_representation = False
+
+            if args.representation_based_training:
+                self.representation_based_training = args.representation_based_training
 
         # MuExplore:
         self.uncertainty_architecture_type = args.uncertainty_architecture_type

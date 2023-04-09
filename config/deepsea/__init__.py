@@ -86,8 +86,8 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            ube_td_steps=5,
-            reset_ube_interval=5000,
+            ube_td_steps=3,
+            reset_ube_interval=6000,
             rnd_scale=0.01,
             ube_support=DiscreteSupport(-10, 10, delta=1),
         )
@@ -119,7 +119,10 @@ class DeepSeaConfig(BaseConfig):
         self.encoder_layers = [1024, 1024, 256]
         self.encoding_size = 4  # The encoded state is of size self.encoding_size * self.encoding_size
 
-        self.reset_all_weights = False
+        self.reset_all_weights = True
+
+        self.representation_based_training = False   # For deep sea, changes muzero training to be based on
+        # representations of true states, not hidden states
 
         # To reduce the effect of the policy on the selection, we reduce pb_c_init to 0.5.
         # This should give the policy about half the weight
@@ -204,17 +207,23 @@ class DeepSeaConfig(BaseConfig):
                 p.requires_grad = False
                 p *= 4
         if 'ensemble' in self.uncertainty_architecture_type:
-            model.dynamics_network.fc.apply(fn=init_kaiming_trunc_haiku)
-            model.value_network.apply(fn=init_kaiming_trunc_haiku)
+            if not self.learned_model:
+                model.dynamics_network.fc.apply(fn=init_kaiming_trunc_haiku)
+                model.value_network.apply(fn=init_kaiming_trunc_haiku)
             if self.use_prior:
-                model.dynamics_network.fc_net_prior.apply(fn=init_kaiming_trunc_haiku)
-                model.value_network_prior.apply(fn=init_kaiming_trunc_haiku)
+                if not self.learned_model:
+                    model.dynamics_network.fc_net_prior.apply(fn=init_kaiming_trunc_haiku)
+                    model.value_network_prior.apply(fn=init_kaiming_trunc_haiku)
                 for p in model.dynamics_network.fc_net_prior.parameters():
                     p.requires_grad = False
                     p *= 2
                 for p in model.value_network_prior.parameters():
                     p.requires_grad = False
                     p *= 2
+        # if self.learned_model:
+        #     with torch.no_grad():
+        #         for p in model.dynamics_network.state_prediction_net.parameters():
+        #             p *= 2
         if self.use_encoder:
             model.representation_encoder.apply(fn=init_kaiming_trunc_haiku)
             for p in model.representation_encoder.parameters():

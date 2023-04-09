@@ -112,6 +112,10 @@ if __name__ == '__main__':
     parser.add_argument('--prior_scale', type=float, default=None,
                         help='The scale of the prior, >= 0. If not specified, reverts to the prior specified in the '
                              'config file.')
+    parser.add_argument('--representation_based_training', action='store_true', default=False,
+                        help="If true, modifies MuZero's training. The reward, value and policy prediction are trained "
+                             "over representation prediction of the true observation, rather than of the next_state "
+                             "output-ed by the transition-dynamics function. Only implemented for Deep Sea.")
 
     # Process arguments
     args = parser.parse_args()
