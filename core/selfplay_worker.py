@@ -435,7 +435,8 @@ class DataWorker(object):
                                                                       deterministic=deterministic)
 
                             # MuExplore: Add state-action to visitation counter
-                            if self.config.use_visitation_counter and i >= exploit_env_nums:
+                            if self.config.use_visitation_counter and \
+                                    (i >= exploit_env_nums or not self.config.use_deep_exploration):
                                 # Take the last observation that was stored, and the current action
                                 self.visitation_counter.observe(game_histories[i].obs_history[-1], action)
 

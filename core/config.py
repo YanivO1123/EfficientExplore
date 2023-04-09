@@ -294,7 +294,7 @@ class BaseConfig(object):
         # Root prior exploration noise.
         self.value_delta_max = value_delta_max
         self.root_dirichlet_alpha = dirichlet_alpha
-        self.root_exploration_fraction = 0.25   # original: 0.25, first attempt reduced: 0.1
+        self.root_exploration_fraction = 0.25  # original: 0.25, first attempt reduced: 0.1
 
         # UCB formula
         self.pb_c_base = 19652
@@ -313,7 +313,7 @@ class BaseConfig(object):
         self.transition_num = transition_num
         self.batch_size = batch_size
         # unroll steps
-        self.num_unroll_steps = num_unroll_steps # 5
+        self.num_unroll_steps = num_unroll_steps  # 5
         self.td_steps = td_steps
         self.frame_skip = frame_skip
         self.stacked_observations = stacked_observations
@@ -358,9 +358,9 @@ class BaseConfig(object):
 
         ## uncertainty
         # architecture
-        self.architecture_type = 'resnet'   # Decides the architecture of the NN. 'fully_connected' is only implemented for deepsea
+        self.architecture_type = 'resnet'  # Decides the architecture of the NN. 'fully_connected' is only implemented for deepsea
         self.use_uncertainty_architecture = False
-        self.uncertainty_architecture_type = None   # default is set in main, in parameter parsing
+        self.uncertainty_architecture_type = None  # default is set in main, in parameter parsing
 
         # ensemble
         self.ensemble_size = ensemble_size
@@ -371,11 +371,11 @@ class BaseConfig(object):
         self.rnd_scale = rnd_scale
 
         # exploration
-        self.use_deep_exploration = False       # Activated in set_config if mu_explore or ube
+        self.use_deep_exploration = False  # Activated in set_config if mu_explore or ube
         self.mu_explore = mu_explore
         self.beta = beta
         self.disable_policy_in_exploration = disable_policy_in_exploration
-        self.number_of_exploratory_envs = 0     # Setup in set_config if self.use_deep_exploration
+        self.number_of_exploratory_envs = 0  # Setup in set_config if self.use_deep_exploration
 
         # visitation counter
         self.use_visitation_counter = use_visitation_counter
@@ -391,7 +391,7 @@ class BaseConfig(object):
         self.use_max_policy_targets = use_max_policy_targets
 
         # Action selection:
-        self.standard_action_selection = True   # Set to false in set_config if not MuExplore and yes ube
+        self.standard_action_selection = True  # Set to false in set_config if not MuExplore and yes ube
 
         # UBE hyper parameters
         self.ube_td_steps = ube_td_steps
@@ -560,10 +560,10 @@ class BaseConfig(object):
             if self.plan_with_visitation_counter:
                 self.plan_with_fake_visit_counter = args.plan_w_fake_visit_counter
                 self.plan_with_state_visits = args.plan_w_state_visits
-            self.architecture_type = 'fully_connected'     # Only fully_connected is implemented for deep_sea
-            self.learned_model = not args.alpha_zero_planning   # AlphaZero is only implemented in deep_sea
+            self.architecture_type = 'fully_connected'  # Only fully_connected is implemented for deep_sea
+            self.learned_model = not args.alpha_zero_planning  # AlphaZero is only implemented in deep_sea
             if not self.learned_model:
-                self.do_consistency = False # Consistency loss only makes sense with a learned model.
+                self.do_consistency = False  # Consistency loss only makes sense with a learned model.
             self.deepsea_randomize_actions = not args.det_deepsea_actions
             if args.learned_representation:
                 self.identity_representation = False
@@ -577,7 +577,8 @@ class BaseConfig(object):
         assert (args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter)) or (
             not args.mu_explore)  # MuExplore is only applicable with some uncertainty mechanism
         self.mu_explore = args.mu_explore and (self.use_uncertainty_architecture or self.use_visitation_counter)
-        self.use_deep_exploration = self.mu_explore or 'ube' in self.uncertainty_architecture_type
+        self.use_deep_exploration = self.mu_explore or \
+                                    ('ube' in self.uncertainty_architecture_type and args.use_deep_exploration)
         if args.beta is not None and args.beta >= 0:
             self.beta = args.beta * 1.0
         elif args.beta is not None and args.beta < 0:

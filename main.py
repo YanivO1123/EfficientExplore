@@ -116,6 +116,9 @@ if __name__ == '__main__':
                         help="If true, modifies MuZero's training. The reward, value and policy prediction are trained "
                              "over representation prediction of the true observation, rather than of the next_state "
                              "output-ed by the transition-dynamics function. Only implemented for Deep Sea.")
+    parser.add_argument('--use_deep_exploration', action='store_true', default=False,
+                        help="If true, uses deep exploration based on either UBE or MuExplore. Always true if MuExplore, "
+                             "otherwise only applicable with UBE.")
 
     # Process arguments
     args = parser.parse_args()
