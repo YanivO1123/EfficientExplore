@@ -337,7 +337,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
     def prediction(self, encoded_state):
         # We reshape the encoded_state to the shape of input of the FC nets that follow
-        encoded_state = encoded_state.reshape(encoded_state.shape[0], -1).detach()
+        encoded_state = encoded_state.reshape(encoded_state.shape[0], -1)
 
         # If we use an encoder, we plan with the true model, and this call came out of recurrent inference
         # i.e. encoded_state is a true state, we pass it through the encoder first.
@@ -371,7 +371,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         )
         action_one_hot.scatter_(1, action.long(), 1.0)
         flattened_state = encoded_state.reshape(batch_size, -1)
-        x = torch.cat((flattened_state, action_one_hot), dim=-1).detach()
+        x = torch.cat((flattened_state, action_one_hot), dim=-1)
         if self.learned_model:
             next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, reward_hidden)
         else:
@@ -431,7 +431,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             https://arxiv.org/pdf/1709.05380.pdf). The state is always detached, because we don't want the UBE
             prediction to train the learned dynamics and representation networks.
         """
-        state = state.reshape(state.shape[0], -1).detach()
+        state = state.reshape(state.shape[0], -1)
         if self.use_encoder and not self.learned_model:
             state = self.representation_encoder(state.detach()).detach()
         # We squeeze the result to return tensor of shape [B] instead of [B, 1]
@@ -574,8 +574,9 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         if self.learned_model:
             # Flatten input state-action for FC nets
             x = x.view(-1, self.dynamics_input_size)
-            # Next-state prediction is done based on a FC network
-            next_state = self.state_prediction_net(x)
+            # Next-state prediction is done based on a FC network. We multiply the output by a constant to guarantee
+            # that the state prediction is arbitrary vectors numerically
+            next_state = self.state_prediction_net(x) # * 5
             # if self.use_prior:
             #     next_state = self.state_prediction_net(x) + self.prior_scale * self.state_prediction_net_prior(x.detach()).detach()
             # else:
@@ -618,7 +619,6 @@ class FullyConnectedDynamicsNetwork(nn.Module):
 
         # Reward prediction is done based on EfficientExplore architecture, only if we don't use an ensemble.
         if self.ensemble:
-            x = x.detach()
             if self.use_prior:
                 value_prefix = [value_prefix_net(x) + self.prior_scale *
                                 prior_net(x.detach()).detach() for value_prefix_net, prior_net
