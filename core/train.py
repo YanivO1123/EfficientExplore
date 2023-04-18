@@ -215,7 +215,9 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 # consistency loss
                 if config.consistency_coeff > 0:
                     # obtain the oracle hidden states from representation function
-                    _, _, _, presentation_state, _, _, _ = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
+                    _, _, _, presentation_state, _, _, _ = model.initial_inference(
+                        obs_target_batch[:, beg_index:end_index, :, :])
+
                     # In deep sea, we use MSE between the true state and the learned state
                     if 'deep_sea' in config.env_name:
                         flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
@@ -223,6 +225,25 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                                                                                   -1).detach()
                         temp_loss = deep_sea_consistency_loss(flattened_hidden_state, flattened_presentation_state) * \
                                     mask_batch[:, step_i]
+
+                        # Changes MuZero training from reward/value loss based dynamics to representation based reward/value
+                        if config.representation_based_training and step_i > 0:
+                            value, value_prefix, policy_logits, one_step_state, reward_hidden, _, _ = model.recurrent_inference(
+                                correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
+                        # Otherwise, re-compute recurrent_inf anyway for a 1-step consistency loss
+                        elif step_i > 0:
+                            _, _, _, one_step_state, _, _, _ = model.recurrent_inference(
+                                correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
+
+                        # 1-step consistency losses
+                        if step_i > 0:
+                            flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
+                            temp_loss += deep_sea_consistency_loss(flattened_hidden_state,
+                                                                   flattened_presentation_state) * \
+                                         mask_batch[:, step_i]
+
+                        correct_hidden_state = presentation_state
+                        previous_reward_hidden = reward_hidden
                     else:
                         # no grad for the presentation_state branch
                         dynamic_proj = model.project(hidden_state, with_grad=True)
@@ -231,14 +252,6 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
                     other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                     consistency_loss += temp_loss
-
-                    # TODO: This changes MuZero training from reward/value loss based dynamics to representation based
-                    #  reward/value
-                    if 'deep_sea' in config.env_name and config.representation_based_training:
-                        value, value_prefix, policy_logits, _, reward_hidden, _, _ = model.recurrent_inference(
-                            correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
-                        correct_hidden_state = presentation_state
-                        previous_reward_hidden = reward_hidden
 
                 if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                     action = action_batch[:, step_i]
@@ -303,13 +316,35 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
             # consistency loss
             if config.consistency_coeff > 0:
                 # obtain the oracle hidden states from representation function
-                _, _, _, presentation_state, _, _, _ = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
+                _, _, _, presentation_state, _, _, _ = model.initial_inference(
+                    obs_target_batch[:, beg_index:end_index, :, :])
+
                 # In deep sea, we use MSE between the true state and the learned state
                 if 'deep_sea' in config.env_name:
                     flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
-                    flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0], -1).detach()
+                    flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
+                                                                              -1).detach()
                     temp_loss = deep_sea_consistency_loss(flattened_hidden_state, flattened_presentation_state) * \
                                 mask_batch[:, step_i]
+
+                    # Changes MuZero training from reward/value loss based dynamics to representation based reward/value
+                    if config.representation_based_training and step_i > 0:
+                        value, value_prefix, policy_logits, one_step_state, reward_hidden, _, _ = model.recurrent_inference(
+                            correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
+                    # Otherwise, re-compute recurrent_inf anyway for a 1-step consistency loss
+                    elif step_i > 0:
+                        _, _, _, one_step_state, _, _, _ = model.recurrent_inference(
+                            correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
+
+                    # 1-step consistency losses
+                    if step_i > 0:
+                        flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
+                        temp_loss += deep_sea_consistency_loss(flattened_hidden_state,
+                                                               flattened_presentation_state) * \
+                                     mask_batch[:, step_i]
+
+                    correct_hidden_state = presentation_state
+                    previous_reward_hidden = reward_hidden
                 else:
                     # no grad for the presentation_state branch
                     dynamic_proj = model.project(hidden_state, with_grad=True)
@@ -318,14 +353,6 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
                 other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                 consistency_loss += temp_loss
-
-                # TODO: This changes MuZero training from reward/value loss based dynamics to representation based
-                #  reward/value
-                if 'deep_sea' in config.env_name and config.representation_based_training:
-                    value, value_prefix, policy_logits, _, reward_hidden, _, _ = model.recurrent_inference(
-                        correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
-                    correct_hidden_state = presentation_state
-                    previous_reward_hidden = reward_hidden
 
             if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                 action = action_batch[:, step_i]

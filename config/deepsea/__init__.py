@@ -30,7 +30,7 @@ class DeepSeaConfig(BaseConfig):
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
-            batch_size=128,  # 32 # 64 #256,  # TODO: can be larger with smaller net
+            batch_size=128,  # 32 # 64 # 256
             td_steps=5,     # 5, 10, 3, 1
             num_actors=1,
             # network initialization/ & normalization
@@ -38,7 +38,7 @@ class DeepSeaConfig(BaseConfig):
             init_zero=True,
             clip_reward=False,  # no need to clip reward in deepsea
             # storage efficient
-            cvt_string=False,    # deepsea returns a 1 hot encoding, no need to
+            cvt_string=False,    # deepsea returns a 1 hot encoding
             image_based=False,   #
             # lr scheduler
             lr_warm_up=0.01,
@@ -48,7 +48,7 @@ class DeepSeaConfig(BaseConfig):
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=1000,   # 500 400 32 5000 1000
+            start_transitions=500,   # 500 400 32 5000 1000
             total_transitions=50 * 1000,
             transition_num=1,
             do_consistency=True,
@@ -59,7 +59,7 @@ class DeepSeaConfig(BaseConfig):
             reward_loss_coeff=1.0,
             value_loss_coeff=0.5,  # 0.25 original # 1 0.5
             policy_loss_coeff=0.5,
-            consistency_coeff=2.0,
+            consistency_coeff=10.0,
             ube_loss_coeff=0.25,
             # reward sum
             lstm_hidden_size=64, #512
@@ -86,9 +86,9 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            ube_td_steps=3,
+            ube_td_steps=5,
             reset_ube_interval=6000,
-            rnd_scale=0.01,
+            rnd_scale=0.1,
             ube_support=DiscreteSupport(-10, 10, delta=1),
         )
         self.start_transitions = max(1, self.start_transitions)
@@ -99,7 +99,7 @@ class DeepSeaConfig(BaseConfig):
         # Fullyconnected arch. specs
         self.identity_representation = True
         self.fc_representation_layers = [128, 128]
-        self.fc_state_prediction_layers = [512, 512, 512] # [64] [128, 128, 128]
+        self.fc_state_prediction_layers = [512, 512] # [64] [128, 128, 128]
         self.fc_state_prediction_prior_layers = [128, 128, 128] # [128, 128, 128]
         self.fc_reward_layers = [128, 128] # [64, 64], [128, 128]
         self.fc_reward_prior_layers = [256, 128]    # [128, 128]

@@ -326,7 +326,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                 encoded_state = encoded_state.reshape(encoded_state.shape[0], 1, self.encoding_size, self.encoding_size)
             elif self.learned_model:
                 # Rescale the states to make them easier to learn with the MSE-based consistency loss.
-                encoded_state = encoded_state * 20
+                encoded_state = encoded_state * 10
         else:
             batch_size = observation.shape[0]
             observation = observation.reshape(observation.shape[0], -1)

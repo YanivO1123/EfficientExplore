@@ -185,15 +185,15 @@ def load_counts(path):
 # Test heat_map plotter
 # Generate some random data
 
-path = "/home/yaniv/EfficientExplore/results_from_cluster/results/deep_sea/muexplore/deep_sea/20/mu_explore_seed=734466/Tue Mar 28 03:41:37 2023/s_counts.npy"
+path = "/home/yaniv/EfficientExplore/results/deep_sea/muexplore/deep_sea/7/mu_explore_seed=5339032/Tue Apr 18 19:11:45 2023/s_counts.npy"
 # s_counts = np.random.randint(1000, size=(50, 50))
 s_counts = np.load(path)
 scores = np.random.rand(50, 50)
 bucket_size = 2
 bucket_cap = 5
 # Plot the heat map
-c_p.plot_heat_maps(s_counts, sa_counts=None, count_cap=10)
-c_p.plot_scores_vs_counts(s_counts, scores, bucket_size, bucket_cap)
+c_p.plot_heat_maps(s_counts, sa_counts=None, count_cap=20)
+# c_p.plot_scores_vs_counts(s_counts, scores, bucket_size, bucket_cap)
 plt.show()
 exit()
 

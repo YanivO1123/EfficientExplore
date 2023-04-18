@@ -88,7 +88,7 @@ class BaseConfig(object):
                  sampling_times: int = 0,
                  ube_td_steps: int = 5,
                  ube_loss_coeff: float = 2,
-                 ube_support: DiscreteSupport = DiscreteSupport(0, 300, delta=1),
+                 ube_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
                  count_based_ube: bool = False,
                  num_simulations_ube: int = 30,
                  reset_ube_interval: int = 1000 * 5,

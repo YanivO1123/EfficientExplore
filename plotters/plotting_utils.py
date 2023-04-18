@@ -139,9 +139,12 @@ def plot_heat_maps(s_counts, sa_counts=None, count_cap=None):
         if sa_counts is not None:
             sa_counts[sa_counts > count_cap] = count_cap
 
+    cmap = plt.cm.get_cmap('plasma_r')  # 10 distinct colors
+    cmap.set_under('white')  # set color for 0 counts to black
+
     # Define a color scheme with 10 distinct colors
     fig, ax = plt.subplots()
-    im = ax.imshow(s_counts, cmap='plasma_r', vmin=-0.5, vmax=count_cap + 0.5 if count_cap is not None else 10.5)
+    im = ax.imshow(s_counts, cmap=cmap, vmin=0.5, vmax=count_cap + 0.5 if count_cap is not None else 10.5)
 
     # Set up the colorbar
     cbar = ax.figure.colorbar(im, ax=ax)

@@ -804,7 +804,7 @@ class DataWorker(object):
 
     def evaluate_uncertainty(self, model, step_count):
         """
-        The function computes the epistemic uncertainty associated with every state in the environment.
+        The function computes the epistemic value uncertainty associated with every state in the environment.
         Only implemented for deep_sea.
         """
         print(f"In dataworker, in function evaluate_uncertainty, at transition {step_count}. Starting uncertainty "
@@ -829,39 +829,81 @@ class DataWorker(object):
                 network_output = model.initial_inference(stack_obs.float())
         else:
             network_output = model.initial_inference(stack_obs.float())
-        hidden_state_roots = network_output.hidden_state
-        reward_hidden_roots = network_output.reward_hidden
-        value_prefix_pool = network_output.value_prefix
-        policy_logits_pool = network_output.policy_logits.tolist()
-        value_prefix_variance_pool = network_output.value_prefix_variance
-        value_pool = network_output.value
-        noises = [
-            np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
-                np.float32).tolist() for _ in range(env_nums)]
-        # Disable policy prior in exploration
-        if self.config.disable_policy_in_exploration:
-            policy_logits_pool = [np.ones_like(policy_logits_pool[0]).tolist()
-                                  for _ in range(len(policy_logits_pool))]
 
-        # Init Exploratory CRoots and prepare them exploratorily
-        roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations,
-                             self.config.beta, self.config.number_of_exploratory_envs)
-        roots.prepare_explore(self.config.root_exploration_fraction, noises, value_prefix_pool,
-                              policy_logits_pool, value_prefix_variance_pool, self.config.beta,
-                              self.config.number_of_exploratory_envs)
+        if self.config.mu_explore:
+            hidden_state_roots = network_output.hidden_state
+            reward_hidden_roots = network_output.reward_hidden
+            value_prefix_pool = network_output.value_prefix
+            policy_logits_pool = network_output.policy_logits.tolist()
+            value_prefix_variance_pool = network_output.value_prefix_variance
+            value_pool = network_output.value
+            noises = [
+                np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
+                    np.float32).tolist() for _ in range(env_nums)]
+            # Disable policy prior in exploration
+            if self.config.disable_policy_in_exploration:
+                policy_logits_pool = [np.ones_like(policy_logits_pool[0]).tolist()
+                                      for _ in range(len(policy_logits_pool))]
 
-        # Call MCTS:
-        # We ONLY propagate uncertainty. What is the estimate at the root?
-        MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=True)
-        roots_distributions = roots.get_distributions()
-        # roots_values = roots.get_values()
-        # children_values = roots.get_roots_children_values(self.config.discount)
-        roots_uncertainties = roots.get_values_uncertainty()
-        children_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)
+            # Init Exploratory CRoots and prepare them exploratorily
+            roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations,
+                                 self.config.beta, self.config.number_of_exploratory_envs)
+            roots.prepare_explore(self.config.root_exploration_fraction, noises, value_prefix_pool,
+                                  policy_logits_pool, value_prefix_variance_pool, self.config.beta,
+                                  self.config.number_of_exploratory_envs)
 
-        state_uncertainties = np.asarray(roots_uncertainties).reshape(env_size, env_size)
-        state_action_uncertainties = np.asarray(children_uncertainties).reshape(env_size, env_size,
-                                                                                self.config.action_space_size)
+            # Call MCTS:
+            # We ONLY propagate uncertainty. What is the estimate at the root?
+            MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=True)
+            roots_distributions = roots.get_distributions()
+            # roots_values = roots.get_values()
+            # children_values = roots.get_roots_children_values(self.config.discount)
+            roots_uncertainties = roots.get_values_uncertainty()
+            children_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)
+
+            state_uncertainties = np.asarray(roots_uncertainties).reshape(env_size, env_size)
+            state_action_uncertainties = np.asarray(children_uncertainties).reshape(env_size, env_size,
+                                                                                    self.config.action_space_size)
+        else:
+            state_uncertainties = network_output.value_variance.reshape(env_size, env_size).cpu().numpy()
+
+            hidden_states = torch.from_numpy(network_output.hidden_state).float().to(self.device)
+            actions_zero = torch.zeros(size=(env_size * env_size, 1)).long().to(self.device)
+            actions_one = torch.ones(size=(env_size * env_size, 1)).long().to(self.device)
+            hidden_states_c_reward = torch.from_numpy(network_output.reward_hidden[0]).float().to(self.device)
+            hidden_states_h_reward = torch.from_numpy(network_output.reward_hidden[1]).float().to(self.device)
+
+            if self.config.amp_type == 'torch_amp':
+                with autocast():
+                    network_output_action_zero = model.recurrent_inference(hidden_states,
+                                                               (hidden_states_c_reward,
+                                                                hidden_states_h_reward),
+                                                               actions_zero)
+                    network_output_action_one = model.recurrent_inference(hidden_states,
+                                                               (hidden_states_c_reward,
+                                                                hidden_states_h_reward),
+                                                               actions_one)
+            else:
+                network_output_action_zero = model.recurrent_inference(hidden_states,
+                                                               (hidden_states_c_reward,
+                                                                hidden_states_h_reward),
+                                                               actions_zero)
+                network_output_action_one = model.recurrent_inference(hidden_states,
+                                                               (hidden_states_c_reward,
+                                                                hidden_states_h_reward),
+                                                               actions_one)
+
+            state_action_uncertainties = torch.stack((network_output_action_zero.value_variance.reshape(env_size, env_size),
+                                                      network_output_action_one.value_variance.reshape(env_size, env_size)),
+                                                     dim=-1).cpu().numpy()
+
+        assert np.shape(state_action_uncertainties) == (env_size, env_size, 2) and \
+               np.shape(state_uncertainties) == (env_size, env_size), f"state_action_uncertainties shape is " \
+                                                                      f"{np.shape(state_action_uncertainties)} " \
+                                                                      f"and expected {(env_size, env_size, 2)}. \n" \
+                                                                      f"state_uncertainties shape is " \
+                                                                      f"{np.shape(state_uncertainties)}, " \
+                                                                      f"and expected {(env_size, env_size)}"
 
         # save the uncertainties.
         np.save(self.config.exp_path + f"/state_uncertainties_transition_{step_count}", state_uncertainties)
