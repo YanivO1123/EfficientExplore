@@ -61,6 +61,7 @@ def no_batch_norm_mlp(
         output_activation=torch.nn.Identity,
         activation=torch.nn.ReLU,
         init_zero=False,
+        bias=True,
 ):
     """MLP layers without batch normalization.
         Parameters
@@ -79,7 +80,7 @@ def no_batch_norm_mlp(
     layers = []
     for i in range(len(sizes) - 1):
         act = activation if i < len(sizes) - 2 else output_activation
-        layers += [torch.nn.Linear(sizes[i], sizes[i + 1]), act()]
+        layers += [torch.nn.Linear(sizes[i], sizes[i + 1], bias=bias), act()]
 
     if init_zero:
         layers[-2].weight.data.fill_(0)
@@ -357,26 +358,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         return policy, value
 
     def dynamics(self, encoded_state, reward_hidden, action):
-        # Turn in a state_action vector
-        batch_size = encoded_state.shape[0]
-        action_one_hot = (
-            torch.zeros(
-                size=(
-                    batch_size,  # batch dimension
-                    self.action_space_size
-                )
-            )
-            .to(action.device)
-            .float()
-        )
-        action_one_hot.scatter_(1, action.long(), 1.0)
-        flattened_state = encoded_state.reshape(batch_size, -1)
-        x = torch.cat((flattened_state, action_one_hot), dim=-1)
-        if self.learned_model:
-            next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, reward_hidden)
-        else:
-            next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(x, reward_hidden, encoded_state,
-                                                                                    action)
+        next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(reward_hidden, encoded_state, action)
         return next_encoded_state, reward_hidden, value_prefix
 
     def get_params_mean(self):
@@ -526,6 +508,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         """
         super().__init__()
         self.hidden_state_shape = hidden_state_shape
+        self.hidden_state_size = hidden_state_size
         self.dynamics_input_size = dynamics_input_size
         # True-model planning params
         self.env_size = env_size
@@ -541,8 +524,8 @@ class FullyConnectedDynamicsNetwork(nn.Module):
 
         # Init dynamics prediction, learned or given
         if learned_model:
-            self.state_prediction_net = no_batch_norm_mlp(dynamics_input_size, fc_state_prediction_layers,
-                                                          hidden_state_size, init_zero=False)
+            self.state_prediction_net = no_batch_norm_mlp(hidden_state_size, fc_state_prediction_layers,
+                                                          2 * hidden_state_size, init_zero=False, bias=False)
             # if self.use_prior:
             #     self.state_prediction_net_prior = no_batch_norm_mlp(dynamics_input_size, fc_state_prediction_prior_layers,
             #                                               hidden_state_size, init_zero=False)
@@ -569,36 +552,33 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             self.bn_value_prefix = nn.BatchNorm1d(lstm_hidden_size, momentum=momentum)
             self.fc = mlp(lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero,
                           momentum=momentum)
+            # self.fc = no_batch_norm_mlp(lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero)
 
-    def forward(self, x, reward_hidden, current_state=None, action=None):
+    def forward(self, reward_hidden, encoded_state, action):
         if self.learned_model:
-            # Flatten input state-action for FC nets
-            x = x.view(-1, self.dynamics_input_size)
-            # Next-state prediction is done based on a FC network. We multiply the output by a constant to guarantee
-            # that the state prediction is arbitrary vectors numerically
-            next_state = self.state_prediction_net(x) # * 5
-            # if self.use_prior:
-            #     next_state = self.state_prediction_net(x) + self.prior_scale * self.state_prediction_net_prior(x.detach()).detach()
-            # else:
-            #     next_state = self.state_prediction_net(x)
-
-            # Reshape the state to the shape MuZero expects: [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
-            next_state = next_state.reshape(-1,
+            batch_size = encoded_state.shape[0]
+            action_space_size = 2
+            actions = action.view(batch_size, 1, 1)
+            # Flatten the state
+            flattened_state = encoded_state.reshape(batch_size, -1)
+            # Predict next state
+            next_state = self.state_prediction_net(flattened_state).reshape(batch_size, action_space_size, -1)
+            # Gather along the action-dim, and reshape back to the expected MuZero state shape
+            next_state = next_state.gather(dim=1, index=actions.repeat(1, 1, self.hidden_state_size)).reshape(-1,
                                             self.hidden_state_shape[0],
                                             self.hidden_state_shape[1],
                                             self.hidden_state_shape[2])
-
         else:
-            assert current_state is not None and action is not None, f"Cannot plan with true deep_sea model in " \
+            assert encoded_state is not None and action is not None, f"Cannot plan with true deep_sea model in " \
                                                                      f"dynamics without current_state and action inputs"
             # Produce next states from previous state and action, in the shape MuZero expects:
             # [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
-            next_state = self.get_batched_next_states(current_state, action)
+            next_state = self.get_batched_next_states(encoded_state, action)
 
         if self.use_encoder and not self.learned_model:
             # Flatten current state
-            current_state = current_state.reshape(current_state.shape[0], -1)
-            encoded_state = self.representation_encoder(current_state.detach()).detach()
+            encoded_state = encoded_state.reshape(encoded_state.shape[0], -1)
+            encoded_state = self.representation_encoder(encoded_state.detach()).detach()
             encoded_state_size = self.hidden_state_shape[0] * self.hidden_state_shape[1] * self.hidden_state_shape[2]
             action_one_hot = (
                 torch.zeros(
@@ -614,8 +594,21 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             flattened_state = encoded_state.reshape(-1, encoded_state_size)
             x = torch.cat((flattened_state, action_one_hot), dim=1).detach()
         else:
-            # Flatten input state-action for FC nets
-            x = x.view(-1, self.dynamics_input_size)
+            # Turn in a state_action vector
+            batch_size = encoded_state.shape[0]
+            action_one_hot = (
+                torch.zeros(
+                    size=(
+                        batch_size,  # batch dimension
+                        2   # action space size
+                    )
+                )
+                .to(action.device)
+                .float()
+            )
+            action_one_hot.scatter_(1, action.long(), 1.0)
+            flattened_state = encoded_state.reshape(batch_size, -1)
+            x = torch.cat((flattened_state, action_one_hot), dim=-1)
 
         # Reward prediction is done based on EfficientExplore architecture, only if we don't use an ensemble.
         if self.ensemble:

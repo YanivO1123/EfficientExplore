@@ -798,7 +798,7 @@ class EfficientExploreNet(EfficientZeroNet):
             https://arxiv.org/pdf/1709.05380.pdf). The state is detached to prevent the UBE
             prediction from training the learned dynamics and representation networks.
         """
-        ube_prediction = self.ube_network(state.detach())
+        ube_prediction = self.ube_network(state)
         return ube_prediction
 
     def compute_value_rnd_uncertainty(self, state):

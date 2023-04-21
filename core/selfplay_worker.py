@@ -168,6 +168,10 @@ class DataWorker(object):
                         np.save(self.config.exp_path + "/s_counts", np.asarray(current_s_counts))
                         np.save(self.config.exp_path + "/sa_counts", np.asarray(current_sa_counts))
 
+                        if total_transitions in self.config.evaluate_uncertainty_at:
+                            np.save(self.config.exp_path + f"/s_counts_at_step_{total_transitions}", np.asarray(current_s_counts))
+                            np.save(self.config.exp_path + f"/sa_counts_at_step_{total_transitions}", np.asarray(current_sa_counts))
+
                     trained_steps = ray.get(self.storage.get_counter.remote())
                     # training finished
                     if trained_steps >= self.config.training_steps + self.config.last_steps:
@@ -514,6 +518,12 @@ class DataWorker(object):
                             eps_steps_lst[i] += 1
                             total_transitions += 1
 
+                            if self.config.evaluate_uncertainty and total_transitions in self.config.evaluate_uncertainty_at:
+                                try:
+                                    self.evaluate_uncertainty(model=model, step_count=total_transitions)
+                                except:
+                                    traceback.print_exc()
+
                             if self.config.use_priority and not self.config.use_max_priority and start_training:
                                 pred_values_lst[i].append(network_output.value[i].item())
                                 search_values_lst[i].append(roots_values[i])
@@ -811,7 +821,7 @@ class DataWorker(object):
               f"evaluation for every state. {self.config.env_size * self.config.env_size} (parallel) MCTS calls.")
         # init observations for each state
         env_size = self.config.env_size
-        env_nums = self.config.p_mcts_num
+        batch_size = env_size * env_size
 
         batched_obs = []
         for i in range(env_size):
@@ -835,22 +845,22 @@ class DataWorker(object):
             reward_hidden_roots = network_output.reward_hidden
             value_prefix_pool = network_output.value_prefix
             policy_logits_pool = network_output.policy_logits.tolist()
-            value_prefix_variance_pool = network_output.value_prefix_variance
+            value_prefix_variance_pool = network_output.value_prefix_variance.tolist()
             value_pool = network_output.value
             noises = [
                 np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
-                    np.float32).tolist() for _ in range(env_nums)]
+                    np.float32).tolist() for _ in range(batch_size)]
             # Disable policy prior in exploration
             if self.config.disable_policy_in_exploration:
                 policy_logits_pool = [np.ones_like(policy_logits_pool[0]).tolist()
                                       for _ in range(len(policy_logits_pool))]
 
             # Init Exploratory CRoots and prepare them exploratorily
-            roots = cytree.Roots(env_nums, self.config.action_space_size, self.config.num_simulations,
-                                 self.config.beta, self.config.number_of_exploratory_envs)
+            roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations,
+                                 self.config.beta, batch_size)
             roots.prepare_explore(self.config.root_exploration_fraction, noises, value_prefix_pool,
                                   policy_logits_pool, value_prefix_variance_pool, self.config.beta,
-                                  self.config.number_of_exploratory_envs)
+                                  batch_size)
 
             # Call MCTS:
             # We ONLY propagate uncertainty. What is the estimate at the root?

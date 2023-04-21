@@ -238,8 +238,15 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                         # 1-step consistency losses
                         if step_i > 0:
                             flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
-                            temp_loss += deep_sea_consistency_loss(flattened_hidden_state,
-                                                                   flattened_presentation_state) * \
+                            temp_loss += 2 * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                       flattened_presentation_state) * \
+                                         mask_batch[:, step_i]
+                        else:
+                            flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
+                            flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
+                                                                                      -1).detach()
+                            temp_loss += 2 * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                       flattened_presentation_state) * \
                                          mask_batch[:, step_i]
 
                         correct_hidden_state = presentation_state
@@ -249,6 +256,9 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                         dynamic_proj = model.project(hidden_state, with_grad=True)
                         observation_proj = model.project(presentation_state, with_grad=False)
                         temp_loss = consist_loss_func(dynamic_proj, observation_proj) * mask_batch[:, step_i]
+
+                    other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
+                    consistency_loss += temp_loss
 
                     other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                     consistency_loss += temp_loss
@@ -339,9 +349,16 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     # 1-step consistency losses
                     if step_i > 0:
                         flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
-                        temp_loss += deep_sea_consistency_loss(flattened_hidden_state,
+                        temp_loss += 2 * deep_sea_consistency_loss(flattened_hidden_state,
                                                                flattened_presentation_state) * \
                                      mask_batch[:, step_i]
+                    else:
+                        flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
+                        flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
+                                                                                  -1).detach()
+                        temp_loss += 2 * deep_sea_consistency_loss(flattened_hidden_state,
+                                                              flattened_presentation_state) * \
+                                    mask_batch[:, step_i]
 
                     correct_hidden_state = presentation_state
                     previous_reward_hidden = reward_hidden
@@ -373,7 +390,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
             value_loss += config.scalar_value_loss(value, target_value_phi[:, step_i + 1]) * mask_batch[:, step_i]
             value_prefix_loss += config.scalar_reward_loss(value_prefix, target_value_prefix_phi[:, step_i]) * mask_batch[:, step_i]
             # Follow MuZero, set half gradient
-            if model.learned_model:
+            if model.learned_model and not 'deep_sea' in config.env_name:
                 hidden_state.register_hook(lambda grad: grad * 0.5)
 
             # reset hidden states
@@ -527,15 +544,15 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             ]
         if 'rnd' in config.uncertainty_architecture_type:
             parameters = parameters + [
-                {'params': model.rnd_parameters(), 'lr': 1E-02}
+                {'params': model.rnd_parameters(), 'lr': 1e-02}
             ]
         if 'ube' in config.uncertainty_architecture_type:
             parameters = parameters + [
-                {'params': model.ube_network.parameters(), 'lr': config.lr_init}    # was 1E-03
+                {'params': model.ube_network.parameters(), 'lr': config.lr_init}
             ]
         if config.learned_model:
             parameters = parameters + [
-                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': 1E-02 * 0.5}
+                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': 0.5 * 1e-02}
             ]
         optimizer = optim.Adam(parameters, lr=config.lr_init)
     else:
@@ -591,19 +608,22 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             time.sleep(0.3)
             continue
         shared_storage.incr_counter.remote()
-        lr = adjust_lr(config, optimizer, step_count)
+        if 'deep_sea' not in config.env_name:
+            lr = adjust_lr(config, optimizer, step_count)
+        else:
+            lr = config.lr_init
 
         # Periodically reset ube weights
-        if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval * reset_index == 0:
-            reset_index = 1
-            try:
-                if 'deep_sea' in config.env_name:
-                    visit_counter.s_counts = np.zeros(shape=visit_counter.observation_space_shape)
-                    visit_counter.sa_counts = np.zeros(
-                        shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
-                reset_weights(model, config, step_count)
-            except:
-                traceback.print_exc()
+        # if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval * reset_index == 0:
+        #     reset_index = 1
+        #     try:
+        #         if 'deep_sea' in config.env_name:
+        #             visit_counter.s_counts = np.zeros(shape=visit_counter.observation_space_shape)
+        #             visit_counter.sa_counts = np.zeros(
+        #                 shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
+        #         reset_weights(model, config, step_count)
+        #     except:
+        #         traceback.print_exc()
 
         # update model for self-play
         if step_count % config.checkpoint_interval == 0:
