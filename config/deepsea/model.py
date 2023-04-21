@@ -84,7 +84,8 @@ def no_batch_norm_mlp(
 
     if init_zero:
         layers[-2].weight.data.fill_(0)
-        layers[-2].bias.data.fill_(0)
+        if bias:
+            layers[-2].bias.data.fill_(0)
 
     return torch.nn.Sequential(*layers)
 
@@ -525,7 +526,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         # Init dynamics prediction, learned or given
         if learned_model:
             self.state_prediction_net = no_batch_norm_mlp(hidden_state_size, fc_state_prediction_layers,
-                                                          2 * hidden_state_size, init_zero=False, bias=False)
+                                                          2 * hidden_state_size, init_zero=init_zero, bias=False)
             # if self.use_prior:
             #     self.state_prediction_net_prior = no_batch_norm_mlp(dynamics_input_size, fc_state_prediction_prior_layers,
             #                                               hidden_state_size, init_zero=False)

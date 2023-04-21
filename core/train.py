@@ -178,6 +178,9 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     if 'deep_sea' in config.env_name and config.representation_based_training:
         correct_hidden_state = hidden_state
         previous_reward_hidden = reward_hidden
+    # We define loss coefficient for the consistency loss, to favor 1-step losses to allow it to stabilize
+    running_loss_coeff = 0.25
+    one_step_loss_coeff = 2.0
 
     # value RND loss:
     if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
@@ -223,7 +226,8 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                         flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
                         flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
                                                                                   -1).detach()
-                        temp_loss = deep_sea_consistency_loss(flattened_hidden_state, flattened_presentation_state) * \
+                        temp_loss = running_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                                   flattened_presentation_state) * \
                                     mask_batch[:, step_i]
 
                         # Changes MuZero training from reward/value loss based dynamics to representation based reward/value
@@ -238,15 +242,15 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                         # 1-step consistency losses
                         if step_i > 0:
                             flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
-                            temp_loss += 2 * deep_sea_consistency_loss(flattened_hidden_state,
-                                                                       flattened_presentation_state) * \
+                            temp_loss += one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                                         flattened_presentation_state) * \
                                          mask_batch[:, step_i]
                         else:
                             flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
                             flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
                                                                                       -1).detach()
-                            temp_loss += 2 * deep_sea_consistency_loss(flattened_hidden_state,
-                                                                       flattened_presentation_state) * \
+                            temp_loss += one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                                         flattened_presentation_state) * \
                                          mask_batch[:, step_i]
 
                         correct_hidden_state = presentation_state
@@ -256,9 +260,6 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                         dynamic_proj = model.project(hidden_state, with_grad=True)
                         observation_proj = model.project(presentation_state, with_grad=False)
                         temp_loss = consist_loss_func(dynamic_proj, observation_proj) * mask_batch[:, step_i]
-
-                    other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
-                    consistency_loss += temp_loss
 
                     other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                     consistency_loss += temp_loss
@@ -334,7 +335,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
                     flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
                                                                               -1).detach()
-                    temp_loss = deep_sea_consistency_loss(flattened_hidden_state, flattened_presentation_state) * \
+                    temp_loss = running_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state, flattened_presentation_state) * \
                                 mask_batch[:, step_i]
 
                     # Changes MuZero training from reward/value loss based dynamics to representation based reward/value
@@ -349,14 +350,14 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     # 1-step consistency losses
                     if step_i > 0:
                         flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
-                        temp_loss += 2 * deep_sea_consistency_loss(flattened_hidden_state,
+                        temp_loss += one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
                                                                flattened_presentation_state) * \
                                      mask_batch[:, step_i]
                     else:
                         flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
                         flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
                                                                                   -1).detach()
-                        temp_loss += 2 * deep_sea_consistency_loss(flattened_hidden_state,
+                        temp_loss += one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
                                                               flattened_presentation_state) * \
                                     mask_batch[:, step_i]
 
