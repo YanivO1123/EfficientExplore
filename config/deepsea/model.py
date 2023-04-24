@@ -94,7 +94,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
     def __init__(self,
                  observation_shape,
                  action_space_size,
-                 identity_representation,
+                 representation_type,
                  fc_representation_layers,
                  fc_state_prediction_layers,
                  fc_state_prediction_prior_layers,
@@ -126,7 +126,6 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  ensemble_size=5,
                  use_prior=True,
                  prior_scale=10.0,
-                 use_encoder=False,
                  encoder_layers=None,
                  encoding_size=0,
                  categorical_ube=False,
@@ -141,6 +140,15 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             __________
             observation_shape: tuple or list
                 shape of observations: [C, W, H] = [1, N, N], for deep sea for which this arch. is implemented.
+            representation_type: string
+                options: [learned, identity, concatted, encoder]
+                meanings:
+                    learned: standard MuZero learned representation
+                    identity: the representation function is the identity function
+                    concatted: the representation function takes 1 hot state of shape (B, 1, N, N) and returns a state
+                        of shape (B, 2 * N), made of of a row one-hot vector concatted with a column one-hot vector.
+                    encoder: the representation function is a randomly-initialized, untrained encoder, translating
+                        the state space from (N, N) to (encoding_size, encoding_size)
             learned_model: bool
                 Whether the transition model is learned (true, MuZero), or given (False, ZetaZero, can be thought of as
                 AlphaZero with learned reward function)
@@ -186,16 +194,17 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         self.use_prior = use_prior
         self.prior_scale = prior_scale
         self.env_size = observation_shape[-1]
-        self.use_encoder = use_encoder
+        self.representation_type = representation_type
+        self.use_encoder = 'encoder' in self.representation_type
+        self.use_identity_representation = 'identity' in self.representation_type
         # The value_uncertainty_propagation_scale coeff is the sum of a geometric series with r = gamma ** 2 and
         # n = env_size. The idea is that for new states local variance prediction should be more reliable than ube
         self.value_uncertainty_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
 
-        assert not (use_encoder and not identity_representation), \
-            f"Encoder and learned representation are not compatible. use_encoder = {use_encoder}, " \
-            f"identity_representation = {identity_representation}"
-
-        self.use_identity_representation = identity_representation
+        assert 'identity' in self.representation_type or 'encoder' in self.representation_type \
+               or 'concatted' in self.representation_type or 'learned' in self.representation_type, \
+            f" self.representation_type = {self.representation_type} and should be one of the following: " \
+            f"'identity' 'encoder' 'concatted' 'learned'"
 
         if self.use_encoder:
             assert encoder_layers is not None, f"encoder_layers must be a list of ints, and was {encoder_layers}"
@@ -208,7 +217,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                                                             init_zero=False)
             hidden_state_shape = (1, encoding_size, encoding_size)  # C * S, W, H
         # In this arch. the representation is the original observation
-        elif identity_representation:
+        elif self.use_identity_representation:
             self.representation_network = torch.nn.Identity()
             # The size of flattened encoded state:
             self.encoded_state_size = observation_shape[0] * observation_shape[1] * observation_shape[2]
@@ -216,11 +225,10 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             self.dynamics_input_size = observation_shape[0] * observation_shape[1] * observation_shape[2] + \
                                        observation_shape[0] * action_space_size
             hidden_state_shape = observation_shape
-        else:
-            assert fc_representation_layers is not None and encoding_size >= 1 and not use_encoder, \
-                f"Requires: fc_representation_layers not None, encoding_size >= 1 and not use_encoder. \n" \
-                f"Got: fc_representation_layers = {fc_representation_layers}, encoding_size = {encoding_size}, " \
-                f"use_encoder = {use_encoder}"
+        elif 'learned' in self.representation_type:
+            assert fc_representation_layers is not None and encoding_size >= 1, \
+                f"Requires: fc_representation_layers not None, encoding_size >= 1. \n" \
+                f"Got: fc_representation_layers = {fc_representation_layers}, encoding_size = {encoding_size}"
             self.encoding_size = encoding_size
             self.encoded_state_size = encoding_size * encoding_size
             self.dynamics_input_size = self.encoded_state_size + action_space_size
@@ -229,6 +237,14 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             self.representation_network = no_batch_norm_mlp(representation_input_size, fc_representation_layers,
                                                             self.encoded_state_size,
                                                             init_zero=False)
+        elif 'concatted' in self.representation_type:
+            self.representation_network = torch.nn.Identity()
+            self.encoded_state_size = self.env_size * 2
+            self.dynamics_input_size = self.encoded_state_size + action_space_size
+            hidden_state_shape = None
+        else:
+            raise ValueError(f" self.representation_type = {self.representation_type} and should be one of the "
+                             f"following: 'identity' 'encoder' 'concatted' 'learned'")
 
         self.policy_network = mlp(self.encoded_state_size, fc_policy_layers, action_space_size, init_zero=init_zero,
                                   momentum=momentum)
@@ -329,6 +345,26 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             elif self.learned_model:
                 # Rescale the states to make them easier to learn with the MSE-based consistency loss.
                 encoded_state = encoded_state * 10
+        elif 'concatted' in self.representation_type:
+            device = observation.device
+            N = self.env_size
+            B = observation.shape[0]
+            flattened_observation = observation.reshape(B, -1)
+            mask = flattened_observation.sum(-1) == 0   # To identify zero-observations
+            zeros_one_hot = torch.zeros(2 * N).to(device)
+
+            # Get the indexes of the 1 hot along the B dimension, and shape them to 1 dim vectors of size batch_size
+            rows = (flattened_observation.argmax(dim=-1) // N).long().squeeze(-1).to(device)
+            columns = (flattened_observation.argmax(dim=-1) % N).long().squeeze(-1).to(device)
+            one_hot_rows = torch.nn.functional.one_hot(rows, N).to(device)
+            one_hot_cols = torch.nn.functional.one_hot(columns, N).to(device)
+
+            # Setup the state tensor of shape [..., 2 * N]
+            encoded_state = torch.cat((one_hot_rows[..., :N], one_hot_cols[..., :N]), dim=-1).float().to(device)
+            # Setup all empty-state tensors to a zeros tensor of the right shape
+            encoded_state[mask] = zeros_one_hot
+            # Multiply by a constant to make it easy for MSE
+            encoded_state = encoded_state * 10
         else:
             batch_size = observation.shape[0]
             observation = observation.reshape(observation.shape[0], -1)
@@ -525,8 +561,8 @@ class FullyConnectedDynamicsNetwork(nn.Module):
 
         # Init dynamics prediction, learned or given
         if learned_model:
-            self.state_prediction_net = no_batch_norm_mlp(hidden_state_size, fc_state_prediction_layers,
-                                                          2 * hidden_state_size, init_zero=init_zero, bias=False)
+            self.state_prediction_net = no_batch_norm_mlp(dynamics_input_size, fc_state_prediction_layers,
+                                                          hidden_state_size, init_zero=init_zero)
             # if self.use_prior:
             #     self.state_prediction_net_prior = no_batch_norm_mlp(dynamics_input_size, fc_state_prediction_prior_layers,
             #                                               hidden_state_size, init_zero=False)
@@ -559,21 +595,27 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         if self.learned_model:
             batch_size = encoded_state.shape[0]
             action_space_size = 2
-            actions = action.view(batch_size, 1, 1)
-            # Flatten the state
+            action_one_hot = (
+                torch.zeros(
+                    size=(
+                        batch_size,  # batch dimension
+                        action_space_size  # action space size
+                    )
+                )
+                .to(action.device)
+                .float()
+            )
+            action_one_hot.scatter_(1, action.long(), 1.0)
             flattened_state = encoded_state.reshape(batch_size, -1)
-            # Predict next state
-            next_state = self.state_prediction_net(flattened_state).reshape(batch_size, action_space_size, -1)
-            # Gather along the action-dim, and reshape back to the expected MuZero state shape
-            next_state = next_state.gather(dim=1, index=actions.repeat(1, 1, self.hidden_state_size)).reshape(-1,
-                                            self.hidden_state_shape[0],
-                                            self.hidden_state_shape[1],
-                                            self.hidden_state_shape[2])
+            x = torch.cat((flattened_state, action_one_hot), dim=-1)
+
+            next_state = self.state_prediction_net(x) * 10
+
+            if self.hidden_state_shape is not None:
+                next_state = next_state.reshape(-1, self.hidden_state_shape[0], self.hidden_state_shape[1],
+                                                self.hidden_state_shape[2])
         else:
-            assert encoded_state is not None and action is not None, f"Cannot plan with true deep_sea model in " \
-                                                                     f"dynamics without current_state and action inputs"
-            # Produce next states from previous state and action, in the shape MuZero expects:
-            # [num_envs or batch_size, channels, H, W] = [B, 1, N, N]
+            # Expected encoded_state shape: [num_envs or batch_size, channels, H, W] = [B, 1, env_size, env_size]
             next_state = self.get_batched_next_states(encoded_state, action)
 
         if self.use_encoder and not self.learned_model:
@@ -594,7 +636,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             action_one_hot.scatter_(1, action.long(), 1.0)
             flattened_state = encoded_state.reshape(-1, encoded_state_size)
             x = torch.cat((flattened_state, action_one_hot), dim=1).detach()
-        else:
+        elif not self.learned_model:
             # Turn in a state_action vector
             batch_size = encoded_state.shape[0]
             action_one_hot = (
@@ -648,6 +690,37 @@ class FullyConnectedDynamicsNetwork(nn.Module):
                 reward_w_dist = param.detach().cpu().numpy().reshape(-1)
         reward_mean = np.abs(reward_w_dist).mean()
         return reward_w_dist, reward_mean
+
+    def get_actions_right(self, batched_states):
+        """
+            Shape of batched_states is (B, H, W)
+            Shape of batched_actions is (B, 1)
+        """
+        batch_size = batched_states.shape[0]
+        N = batched_states.shape[-1]
+
+        # Flatten 1 hot representation
+        flattened_batched_states = batched_states.reshape(shape=(batch_size, N * N)).to(batched_states.device)
+
+        # Get the indexes of the 1 hot along the B dimension, and shape them to 1 dim vectors of size batch_size
+        rows, columns = (flattened_batched_states.argmax(dim=1) // N).long().squeeze(-1).to(batched_states.device), (
+                flattened_batched_states.argmax(dim=1) % N).long().squeeze(-1).to(batched_states.device)
+
+        # action_mapping expected to already be in the form -1, +1, transform back to 1-0
+        action_mapping = (self.action_mapping + 1) / 2
+
+        # Expand the action mapping
+        action_mapping = action_mapping.unsqueeze(0).expand(batch_size, -1, -1).to(batched_states.device)
+
+        # Flatten to shape [B, N * N]
+        flattened_action_mapping = action_mapping.reshape(batch_size, N * N).to(batched_states.device)
+
+        # Get all the actions_right with gather in the flattened (row, col) indexes.
+        flattened_indexes = (rows * N + columns).to(batched_states.device)
+        # actions_right should be of shape [B]
+        actions_right = flattened_action_mapping.take(flattened_indexes).to(batched_states.device)
+
+        return actions_right
 
     def get_batched_next_states(self, batched_states, batched_actions):
         """

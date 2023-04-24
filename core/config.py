@@ -568,7 +568,7 @@ class BaseConfig(object):
                 self.do_consistency = False  # Consistency loss only makes sense with a learned model.
             self.deepsea_randomize_actions = not args.det_deepsea_actions
             if args.learned_representation:
-                self.identity_representation = False
+                self.representation_type = 'learned'
 
             if args.representation_based_training:
                 self.representation_based_training = args.representation_based_training

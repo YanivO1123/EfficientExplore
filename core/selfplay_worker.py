@@ -15,6 +15,7 @@ from core.game import GameHistory
 from core.utils import select_action, prepare_observation_lst, select_q_based_action
 
 from core.visitation_counter import CountUncertainty
+from core.debugging_utils import evaluate_unrolled
 
 
 @ray.remote(num_gpus=0.125)
@@ -167,10 +168,6 @@ class DataWorker(object):
                         self.storage.set_counts.remote(current_s_counts, current_sa_counts)
                         np.save(self.config.exp_path + "/s_counts", np.asarray(current_s_counts))
                         np.save(self.config.exp_path + "/sa_counts", np.asarray(current_sa_counts))
-
-                        if total_transitions in self.config.evaluate_uncertainty_at:
-                            np.save(self.config.exp_path + f"/s_counts_at_step_{total_transitions}", np.asarray(current_s_counts))
-                            np.save(self.config.exp_path + f"/sa_counts_at_step_{total_transitions}", np.asarray(current_sa_counts))
 
                     trained_steps = ray.get(self.storage.get_counter.remote())
                     # training finished
@@ -473,8 +470,9 @@ class DataWorker(object):
                                         previous_visitation_counts = copy.deepcopy(self.visitation_counter.s_counts)
                                         if self.config.mu_explore:
                                             if self.config.learned_model and not self.config.use_encoder and \
-                                                    self.config.identity_representation:
-                                                self.debug_state_prediction(model)
+                                                    'identity' in self.config.representation_type \
+                                                    or 'concatted' in self.config.representation_type:
+                                                self.debug_state_prediction(model, total_transitions)
                                             if 'deep_sea' in self.config.env_name and True:
                                                 self.debug_deep_sea(model)
                                 if self.config.mu_explore and total_transitions > 0:
@@ -517,6 +515,12 @@ class DataWorker(object):
 
                             eps_steps_lst[i] += 1
                             total_transitions += 1
+
+                            if self.config.use_visitation_counter and total_transitions in self.config.evaluate_uncertainty_at:
+                                np.save(self.config.exp_path + f"/s_counts_at_step_{total_transitions}",
+                                        np.asarray(current_s_counts))
+                                np.save(self.config.exp_path + f"/sa_counts_at_step_{total_transitions}",
+                                        np.asarray(current_sa_counts))
 
                             if self.config.evaluate_uncertainty and total_transitions in self.config.evaluate_uncertainty_at:
                                 try:
@@ -717,7 +721,11 @@ class DataWorker(object):
                   # f"children_values = {children_values[i]} roots_distributions = {roots_distributions[i]}, "
                   , flush=True)
 
-    def debug_state_prediction(self, model):
+    def debug_state_prediction(self, model, step):
+        """
+            Evaluates the predictions of unrolled next state from MuZero learned model.
+            Only implemented for deep_sea.
+        """
         diagonal_observations = []
         for i in range(self.config.env_size):
             current_obs = torch.zeros(size=(1, self.config.env_size, self.config.env_size))
@@ -725,53 +733,7 @@ class DataWorker(object):
             diagonal_observations.append(current_obs)
         diagonal_observations = torch.stack(diagonal_observations, dim=0).to(self.device)
 
-        if self.config.amp_type == 'torch_amp':
-            with autocast():
-                network_output = model.initial_inference(diagonal_observations.float())
-        else:
-            network_output = model.initial_inference(diagonal_observations.float())
-
-        representation = torch.from_numpy(network_output.hidden_state).float().to(self.device)
-        actions_left = torch.zeros(size=(self.config.env_size, 1)).long().to(self.device)
-        actions_right = torch.ones(size=(self.config.env_size, 1)).long().to(self.device)
-        hidden_states_c_reward = torch.from_numpy(network_output.reward_hidden[0]).float().to(self.device)
-        hidden_states_h_reward = torch.from_numpy(network_output.reward_hidden[1]).float().to(self.device)
-
-        if self.config.amp_type == 'torch_amp':
-            with autocast():
-                state_prediction_left = model.recurrent_inference(representation,
-                                                           (hidden_states_c_reward, hidden_states_h_reward),
-                                                           actions_left).hidden_state
-                state_prediction_right = model.recurrent_inference(representation,
-                                                                  (hidden_states_c_reward, hidden_states_h_reward),
-                                                                  actions_right).hidden_state
-        else:
-            state_prediction_left = torch.from_numpy(model.recurrent_inference(representation,
-                                                              (hidden_states_c_reward, hidden_states_h_reward),
-                                                              actions_left).hidden_state)
-            state_prediction_right = torch.from_numpy(model.recurrent_inference(representation,
-                                                               (hidden_states_c_reward, hidden_states_h_reward),
-                                                               actions_right).hidden_state)
-
-        # Flatten 1 hot representation
-        B = state_prediction_left.shape[0]
-        N = state_prediction_left.shape[-1]
-        flattened_batched_states_left = state_prediction_left.reshape(shape=(B, N * N))
-        rows_left, columns_left = (flattened_batched_states_left.argmax(dim=1) // N).long().squeeze(), (
-                flattened_batched_states_left.argmax(dim=1) % N).long().squeeze()
-        flattened_batched_states_right = state_prediction_right.reshape(shape=(B, N * N))
-        rows_right, columns_right = (flattened_batched_states_right.argmax(dim=1) // N).long().squeeze(), (
-                flattened_batched_states_right.argmax(dim=1) % N).long().squeeze()
-        print(f"In function debug_state_prediction in self_play. Printing state predictions:", flush=True)
-        for i in range(self.config.env_size):
-            print(f"({i}, {i}), action 0, predicted state: {rows_left[i].item(), columns_left[i].item()},"
-                  f" expected ({i + 1}, _). "
-                  f"and value at that index: {state_prediction_left[i, 0, rows_left[i], columns_left[i]]} \n"
-                  f"({i}, {i}), action 1, predicted state: {rows_right[i].item(), columns_right[i].item()}, "
-                  f"expected ({i + 1}, _). "
-                  f"and value at that index: {state_prediction_right[i, 0, rows_right[i], columns_right[i]]}"
-                  , flush=True)
-        # print(f"The complete state prediction for state (1, 1) and action 0: {state_prediction_left[1, 0, :, :]}")
+        evaluate_unrolled(model, diagonal_observations, self.config.num_unroll_steps, self.config.env_size, step)
 
     def debug_uncertainty(self, total_transitions, row, column, i, roots, action, distributions, value, deterministic):
         if i > (self.config.p_mcts_num - self.config.number_of_exploratory_envs) and self.config.mu_explore and 'deep_sea' in self.config.env_name \

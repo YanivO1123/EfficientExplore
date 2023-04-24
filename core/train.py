@@ -163,7 +163,8 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     predicted_value_prefixs = []
     # Note: Following line is just for logging.
     if vis_result:
-        predicted_values, predicted_policies = scaled_value.detach().cpu(), torch.softmax(policy_logits, dim=1).detach().cpu()
+        predicted_values, predicted_policies = scaled_value.detach().cpu(), torch.softmax(policy_logits,
+                                                                                          dim=1).detach().cpu()
 
     # calculate the new priorities for each transition
     value_priority = L1Loss(reduction='none')(scaled_value.squeeze(-1), target_value[:, 0])
@@ -175,12 +176,14 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     value_prefix_loss = torch.zeros(batch_size, device=config.device)
     consistency_loss = torch.zeros(batch_size, device=config.device)
 
-    if 'deep_sea' in config.env_name and config.representation_based_training:
-        correct_hidden_state = hidden_state
+    if 'deep_sea' in config.env_name:
+        previous_presentation_state = hidden_state
         previous_reward_hidden = reward_hidden
-    # We define loss coefficient for the consistency loss, to favor 1-step losses to allow it to stabilize
-    running_loss_coeff = 0.25
-    one_step_loss_coeff = 2.0
+        one_step_state = None
+        # We define loss coefficient for the consistency loss, to favor 1-step losses to allow it to stabilize
+        softened_one_step_loss_coeff = config.softened_one_step_loss_coeff  # Additive "noise" to deep_sea observations in training
+        running_loss_coeff = config.running_loss_coeff  # Relative loss factor for unrolled consistency loss in deep_sea
+        one_step_loss_coeff = config.one_step_loss_coeff  # Relative loss factor for one-step consistency loss in deep_sea
 
     # value RND loss:
     if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
@@ -209,7 +212,8 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
         with autocast():
             for step_i in range(config.num_unroll_steps):
                 # unroll with the dynamics function
-                value, value_prefix, policy_logits, hidden_state, reward_hidden, _, _ = model.recurrent_inference(hidden_state, reward_hidden, action_batch[:, step_i])
+                value, value_prefix, policy_logits, hidden_state, reward_hidden, _, _ = model.recurrent_inference(
+                    hidden_state, reward_hidden, action_batch[:, step_i])
 
                 beg_index = config.image_channel * step_i
                 end_index = config.image_channel * (step_i + config.stacked_observations)
@@ -226,34 +230,53 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                         flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
                         flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
                                                                                   -1).detach()
-                        temp_loss = running_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
-                                                                                   flattened_presentation_state) * \
-                                    mask_batch[:, step_i]
+                        if step_i > 0:
+                            temp_loss = running_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                                       flattened_presentation_state) * \
+                                        mask_batch[:, step_i]
+                        else:
+                            temp_loss = one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                                        flattened_presentation_state) * \
+                                        mask_batch[:, step_i]
 
                         # Changes MuZero training from reward/value loss based dynamics to representation based reward/value
                         if config.representation_based_training and step_i > 0:
                             value, value_prefix, policy_logits, one_step_state, reward_hidden, _, _ = model.recurrent_inference(
-                                correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
-                        # Otherwise, re-compute recurrent_inf anyway for a 1-step consistency loss
-                        elif step_i > 0:
-                            _, _, _, one_step_state, _, _, _ = model.recurrent_inference(
-                                correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
+                                previous_presentation_state, previous_reward_hidden, action_batch[:, step_i])
+                        else:
+                            previous_one_step_state = hidden_state
 
                         # 1-step consistency losses
                         if step_i > 0:
+                            # Compute the 1 step state
+                            flattened_hidden_state, _, _ = model.dynamics_network(previous_reward_hidden,
+                                                                                  previous_presentation_state.
+                                                                                  reshape(previous_presentation_state.
+                                                                                          shape[0], -1),
+                                                                                  action_batch[:, step_i])
+                            # Compute the 1-step loss
                             flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
                             temp_loss += one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
                                                                                          flattened_presentation_state) * \
                                          mask_batch[:, step_i]
-                        else:
-                            flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
-                            flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
-                                                                                      -1).detach()
-                            temp_loss += one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
-                                                                                         flattened_presentation_state) * \
-                                         mask_batch[:, step_i]
 
-                        correct_hidden_state = presentation_state
+                            if config.use_softened_one_step_loss:
+                                # Compute the 1-step state for softened input
+                                flattened_hidden_state, _, _ = model.dynamics_network(previous_reward_hidden,
+                                                                                      previous_presentation_state.
+                                                                                      reshape(
+                                                                                          previous_presentation_state.
+                                                                                          shape[0], -1) +
+                                                                                      config.softening_coeff,
+                                                                                      action_batch[:, step_i])
+                                # Compute the softened 1-step loss
+                                flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
+                                temp_loss += softened_one_step_loss_coeff * deep_sea_consistency_loss(
+                                    flattened_hidden_state,
+                                    flattened_presentation_state) * \
+                                             mask_batch[:, step_i]
+
+                        previous_presentation_state = presentation_state
                         previous_reward_hidden = reward_hidden
                     else:
                         # no grad for the presentation_state branch
@@ -279,9 +302,12 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     ube_prediction = model.compute_ube_uncertainty(hidden_state)
                     ube_loss += config.ube_loss(ube_prediction, target_ube[:, step_i + 1]) * mask_batch[:, step_i]
 
-                policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(1) * mask_batch[:, step_i]
+                policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(
+                    1) * mask_batch[:, step_i]
                 value_loss += config.scalar_value_loss(value, target_value_phi[:, step_i + 1]) * mask_batch[:, step_i]
-                value_prefix_loss += config.scalar_reward_loss(value_prefix, target_value_prefix_phi[:, step_i]) * mask_batch[:, step_i]
+                value_prefix_loss += config.scalar_reward_loss(value_prefix,
+                                                               target_value_prefix_phi[:, step_i]) * mask_batch[:,
+                                                                                                     step_i]
                 # Follow MuZero, set half gradient
                 if config.learned_model:
                     hidden_state.register_hook(lambda grad: grad * 0.5)
@@ -295,9 +321,11 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     scaled_value_prefixs = config.inverse_reward_transform(value_prefix).detach()
                     scaled_value_prefixs_cpu = scaled_value_prefixs.detach().cpu()
 
-                    predicted_values = torch.cat((predicted_values, config.inverse_value_transform(value).detach().cpu()))
+                    predicted_values = torch.cat(
+                        (predicted_values, config.inverse_value_transform(value).detach().cpu()))
                     predicted_value_prefixs.append(scaled_value_prefixs_cpu)
-                    predicted_policies = torch.cat((predicted_policies, torch.softmax(policy_logits, dim=1).detach().cpu()))
+                    predicted_policies = torch.cat(
+                        (predicted_policies, torch.softmax(policy_logits, dim=1).detach().cpu()))
                     state_lst = np.concatenate((state_lst, hidden_state.detach().cpu().numpy()))
 
                     key = 'unroll_' + str(step_i + 1) + '_l1'
@@ -310,15 +338,19 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
                     other_loss[key] = metric_loss(scaled_value_prefixs_cpu, target_value_prefix_base)
                     if value_prefix_indices_1.any():
-                        other_loss[key + '_1'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_1], target_value_prefix_base[value_prefix_indices_1])
+                        other_loss[key + '_1'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_1],
+                                                             target_value_prefix_base[value_prefix_indices_1])
                     if value_prefix_indices_n1.any():
-                        other_loss[key + '_-1'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_n1], target_value_prefix_base[value_prefix_indices_n1])
+                        other_loss[key + '_-1'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_n1],
+                                                              target_value_prefix_base[value_prefix_indices_n1])
                     if value_prefix_indices_0.any():
-                        other_loss[key + '_0'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_0], target_value_prefix_base[value_prefix_indices_0])
+                        other_loss[key + '_0'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_0],
+                                                             target_value_prefix_base[value_prefix_indices_0])
     else:
         for step_i in range(config.num_unroll_steps):
             # unroll with the dynamics function
-            value, value_prefix, policy_logits, hidden_state, reward_hidden, _, _ = model.recurrent_inference(hidden_state, reward_hidden, action_batch[:, step_i])
+            value, value_prefix, policy_logits, hidden_state, reward_hidden, _, _ = model.recurrent_inference(
+                hidden_state, reward_hidden, action_batch[:, step_i])
 
             beg_index = config.image_channel * step_i
             end_index = config.image_channel * (step_i + config.stacked_observations)
@@ -335,33 +367,51 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
                     flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
                                                                               -1).detach()
-                    temp_loss = running_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state, flattened_presentation_state) * \
-                                mask_batch[:, step_i]
+                    if step_i > 0:
+                        temp_loss = running_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                                   flattened_presentation_state) * \
+                                    mask_batch[:, step_i]
+                    else:
+                        temp_loss = one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                                    flattened_presentation_state) * \
+                                    mask_batch[:, step_i]
 
                     # Changes MuZero training from reward/value loss based dynamics to representation based reward/value
                     if config.representation_based_training and step_i > 0:
                         value, value_prefix, policy_logits, one_step_state, reward_hidden, _, _ = model.recurrent_inference(
-                            correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
-                    # Otherwise, re-compute recurrent_inf anyway for a 1-step consistency loss
-                    elif step_i > 0:
-                        _, _, _, one_step_state, _, _, _ = model.recurrent_inference(
-                            correct_hidden_state, previous_reward_hidden, action_batch[:, step_i])
+                            previous_presentation_state, previous_reward_hidden, action_batch[:, step_i])
+                    else:
+                        previous_one_step_state = hidden_state
 
                     # 1-step consistency losses
                     if step_i > 0:
+                        # Compute the 1 step state
+                        flattened_hidden_state, _, _ = model.dynamics_network(previous_reward_hidden,
+                                                                              previous_presentation_state.
+                                                                              reshape(previous_presentation_state.
+                                                                                      shape[0], -1),
+                                                                              action_batch[:, step_i])
+                        # Compute the 1-step loss
                         flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
                         temp_loss += one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
-                                                               flattened_presentation_state) * \
+                                                                                     flattened_presentation_state) * \
                                      mask_batch[:, step_i]
-                    else:
-                        flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
-                        flattened_presentation_state = presentation_state.reshape(presentation_state.shape[0],
-                                                                                  -1).detach()
-                        temp_loss += one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
-                                                              flattened_presentation_state) * \
-                                    mask_batch[:, step_i]
 
-                    correct_hidden_state = presentation_state
+                        if config.use_softened_one_step_loss:
+                            # Compute the 1-step state for softened input
+                            flattened_hidden_state, _, _ = model.dynamics_network(previous_reward_hidden,
+                                                                                  previous_presentation_state.
+                                                                                  reshape(previous_presentation_state.
+                                                                                          shape[0], -1) +
+                                                                                  config.softening_coeff,
+                                                                                  action_batch[:, step_i])
+                            # Compute the softened 1-step loss
+                            flattened_hidden_state = one_step_state.reshape(one_step_state.shape[0], -1)
+                            temp_loss += softened_one_step_loss_coeff * deep_sea_consistency_loss(flattened_hidden_state,
+                                                                                         flattened_presentation_state) * \
+                                         mask_batch[:, step_i]
+
+                    previous_presentation_state = presentation_state
                     previous_reward_hidden = reward_hidden
                 else:
                     # no grad for the presentation_state branch
@@ -387,9 +437,11 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 ube_prediction = model.compute_ube_uncertainty(hidden_state)
                 ube_loss += config.ube_loss(ube_prediction, target_ube[:, step_i + 1]) * mask_batch[:, step_i]
 
-            policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(1) * mask_batch[:, step_i]
+            policy_loss += -(torch.log_softmax(policy_logits, dim=1) * target_policy[:, step_i + 1]).sum(
+                1) * mask_batch[:, step_i]
             value_loss += config.scalar_value_loss(value, target_value_phi[:, step_i + 1]) * mask_batch[:, step_i]
-            value_prefix_loss += config.scalar_reward_loss(value_prefix, target_value_prefix_phi[:, step_i]) * mask_batch[:, step_i]
+            value_prefix_loss += config.scalar_reward_loss(value_prefix,
+                                                           target_value_prefix_phi[:, step_i]) * mask_batch[:, step_i]
             # Follow MuZero, set half gradient
             if model.learned_model and not 'deep_sea' in config.env_name:
                 hidden_state.register_hook(lambda grad: grad * 0.5)
@@ -418,11 +470,14 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
                 other_loss[key] = metric_loss(scaled_value_prefixs_cpu, target_value_prefix_base)
                 if value_prefix_indices_1.any():
-                    other_loss[key + '_1'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_1], target_value_prefix_base[value_prefix_indices_1])
+                    other_loss[key + '_1'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_1],
+                                                         target_value_prefix_base[value_prefix_indices_1])
                 if value_prefix_indices_n1.any():
-                    other_loss[key + '_-1'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_n1], target_value_prefix_base[value_prefix_indices_n1])
+                    other_loss[key + '_-1'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_n1],
+                                                          target_value_prefix_base[value_prefix_indices_n1])
                 if value_prefix_indices_0.any():
-                    other_loss[key + '_0'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_0], target_value_prefix_base[value_prefix_indices_0])
+                    other_loss[key + '_0'] = metric_loss(scaled_value_prefixs_cpu[value_prefix_indices_0],
+                                                         target_value_prefix_base[value_prefix_indices_0])
     # ----------------------------------------------------------------------------------
     # weighted loss with masks (some invalid states which are out of trajectory.)
     loss = (config.consistency_coeff * consistency_loss + config.policy_loss_coeff * policy_loss +
@@ -499,14 +554,18 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
         predicted_value_prefixs = predicted_value_prefixs.reshape(-1).unsqueeze(-1)
         other_loss['l1'] = metric_loss(predicted_value_prefixs, target_value_prefix_base)
         if value_prefix_indices_1.any():
-            other_loss['l1_1'] = metric_loss(predicted_value_prefixs[value_prefix_indices_1], target_value_prefix_base[value_prefix_indices_1])
+            other_loss['l1_1'] = metric_loss(predicted_value_prefixs[value_prefix_indices_1],
+                                             target_value_prefix_base[value_prefix_indices_1])
         if value_prefix_indices_n1.any():
-            other_loss['l1_-1'] = metric_loss(predicted_value_prefixs[value_prefix_indices_n1], target_value_prefix_base[value_prefix_indices_n1])
+            other_loss['l1_-1'] = metric_loss(predicted_value_prefixs[value_prefix_indices_n1],
+                                              target_value_prefix_base[value_prefix_indices_n1])
         if value_prefix_indices_0.any():
-            other_loss['l1_0'] = metric_loss(predicted_value_prefixs[value_prefix_indices_0], target_value_prefix_base[value_prefix_indices_0])
+            other_loss['l1_0'] = metric_loss(predicted_value_prefixs[value_prefix_indices_0],
+                                             target_value_prefix_base[value_prefix_indices_0])
 
         td_data = (new_priority, target_value_prefix.detach().cpu().numpy(), target_value.detach().cpu().numpy(),
-                   transformed_target_value_prefix.detach().cpu().numpy(), transformed_target_value.detach().cpu().numpy(),
+                   transformed_target_value_prefix.detach().cpu().numpy(),
+                   transformed_target_value.detach().cpu().numpy(),
                    target_value_prefix_phi.detach().cpu().numpy(), target_value_phi.detach().cpu().numpy(),
                    predicted_value_prefixs.detach().cpu().numpy(), predicted_values.detach().cpu().numpy(),
                    target_policy.detach().cpu().numpy(), predicted_policies.detach().cpu().numpy(), state_lst,
@@ -541,11 +600,11 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
 
     if 'deep_sea' in config.env_name:
         parameters = [
-                {'params': model.other_parameters(), 'lr': config.lr_init}
-            ]
+            {'params': model.other_parameters(), 'lr': config.lr_init}
+        ]
         if 'rnd' in config.uncertainty_architecture_type:
             parameters = parameters + [
-                {'params': model.rnd_parameters(), 'lr': 1e-02}
+                {'params': model.rnd_parameters(), 'lr': config.lr_init}    # was 1e-2
             ]
         if 'ube' in config.uncertainty_architecture_type:
             parameters = parameters + [
@@ -553,7 +612,7 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             ]
         if config.learned_model:
             parameters = parameters + [
-                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': 0.5 * 1e-02}
+                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': config.lr_init}  # Was 0.5 * 1e-3
             ]
         optimizer = optim.Adam(parameters, lr=config.lr_init)
     else:
@@ -658,7 +717,8 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             log_data = update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result, step_count)
 
         if step_count % config.log_interval == 0:
-            _log(config, step_count, log_data[0:3], model, replay_buffer, lr, shared_storage, summary_writer, vis_result)
+            _log(config, step_count, log_data[0:3], model, replay_buffer, lr, shared_storage, summary_writer,
+                 vis_result)
 
         # The queue is empty.
         if step_count >= 100 and step_count % 50 == 0 and batch_storage.get_len() == 0:
@@ -709,21 +769,21 @@ def train(config, summary_writer, model_path=None):
           f"Using state-visits (True), or state-action visits (False): {config.plan_with_state_visits} \n"
           f"Using FAKE visitation counter: {config.plan_with_fake_visit_counter} \n"
           f"\n"
-          
+
           f"2. Uncertainty-architecture parameters: \n"
           f"Using uncertainty architecture: {config.use_uncertainty_architecture} \n"
           f"Type of uncertainty architecture: {config.uncertainty_architecture_type} \n"
           f"Ensemble size: {config.ensemble_size} \n"
           f"Use network prior: {config.use_prior} \n"
           f"\n"
-          
+
           f"3. Exploration-targets parameters: \n"
           f"use_max_value_targets = {config.use_max_value_targets} \n"
           f"use_max_policy_targets = {config.use_max_policy_targets} \n"
           f"Using learned model (MuZero): {config.learned_model}, or given dynamics model (Mu-AlphaZero): {not config.learned_model} \n"
           f"Using random encoder: {config.use_encoder}"
           f"\n"
-          
+
           f"Starting workers"
           , flush=True)
 
@@ -739,9 +799,11 @@ def train(config, summary_writer, model_path=None):
 
     # reanalyze workers
     print("Starting Reanalyze workers", flush=True)
-    cpu_workers = [BatchWorker_CPU.remote(idx, replay_buffer, storage, batch_storage, mcts_storage, config) for idx in range(config.cpu_actor)]
+    cpu_workers = [BatchWorker_CPU.remote(idx, replay_buffer, storage, batch_storage, mcts_storage, config) for idx in
+                   range(config.cpu_actor)]
     workers += [cpu_worker.run.remote() for cpu_worker in cpu_workers]
-    gpu_workers = [BatchWorker_GPU.remote(idx, replay_buffer, storage, batch_storage, mcts_storage, config) for idx in range(config.gpu_actor)]
+    gpu_workers = [BatchWorker_GPU.remote(idx, replay_buffer, storage, batch_storage, mcts_storage, config) for idx in
+                   range(config.gpu_actor)]
     workers += [gpu_worker.run.remote() for gpu_worker in gpu_workers]
 
     # self-play workers
@@ -760,6 +822,7 @@ def train(config, summary_writer, model_path=None):
     print('Training over...', flush=True)
 
     return model, final_weights
+
 
 def debug_train_deep_sea(observations_batch, values_targets_batch, policy_targets_batch, rewards_targets_batch,
                          mask_batch, action_mapping_seed, stacked_observations, batch_size, rollout_length,
@@ -792,11 +855,13 @@ def debug_train_deep_sea(observations_batch, values_targets_batch, policy_target
             elif np.array_equal(observation, zero_obs):
                 # If this observation is part of the previous trajectory, AND this trajectory is along a diagonal
                 # AND it's the next observation in this trajectory
-                if len(diagonal_observation_indexes) > 0 and i == diagonal_observation_indexes[-1][0] and j == diagonal_observation_indexes[-1][1] + 1:
+                if len(diagonal_observation_indexes) > 0 and i == diagonal_observation_indexes[-1][0] and j == \
+                        diagonal_observation_indexes[-1][1] + 1:
                     diagonal_observation_indexes.append([i, j])
                     diagonal_observations.append([-1, -1])
 
-    print(f"step_count = {step_count}, Num targets total = {batch_size * (rollout_length + 1)}, ouf of are diagonal = {len(diagonal_observation_indexes)}")
+    print(
+        f"step_count = {step_count}, Num targets total = {batch_size * (rollout_length + 1)}, ouf of are diagonal = {len(diagonal_observation_indexes)}")
     for index, state in zip(diagonal_observation_indexes, diagonal_observations):
         [i, j] = index
         print(f"Trajectory = {i}, state: {state}, "
@@ -900,7 +965,8 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
 
         if training_step % config.reset_ube_interval == 0 and config.periodic_ube_weight_reset:
             visit_counter.s_counts = np.zeros(shape=visit_counter.observation_space_shape)
-            visit_counter.sa_counts = np.zeros(shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
+            visit_counter.sa_counts = np.zeros(
+                shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
 
         if training_step % config.test_interval == 0:
             # Setup observations for every state in the env_size by env_size deep_sea
@@ -943,8 +1009,10 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
 
                         # Prepare for recurrent inf
                         hidden_states = torch.from_numpy(network_output_init.hidden_state).float().to(device)
-                        hidden_states_c_reward = torch.from_numpy(network_output_init.reward_hidden[0]).float().to(device)
-                        hidden_states_h_reward = torch.from_numpy(network_output_init.reward_hidden[1]).float().to(device)
+                        hidden_states_c_reward = torch.from_numpy(network_output_init.reward_hidden[0]).float().to(
+                            device)
+                        hidden_states_h_reward = torch.from_numpy(network_output_init.reward_hidden[1]).float().to(
+                            device)
                         actions_left = torch.zeros(size=(num_columns, 1)).to(device).long()
                         actions_right = torch.ones(size=(num_columns, 1)).to(device).long()
 
@@ -956,10 +1024,12 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                                 ube_predictions = config.inverse_ube_transform(ube_predictions).squeeze()
 
                         network_output_recur_left = model.recurrent_inference(hidden_states,
-                                                                              (hidden_states_c_reward, hidden_states_h_reward),
+                                                                              (hidden_states_c_reward,
+                                                                               hidden_states_h_reward),
                                                                               actions_left)
                         network_output_recur_right = model.recurrent_inference(hidden_states,
-                                                                               (hidden_states_c_reward, hidden_states_h_reward),
+                                                                               (hidden_states_c_reward,
+                                                                                hidden_states_h_reward),
                                                                                actions_right)
                 else:
                     network_output_init = model.initial_inference(stack_obs.float())
@@ -984,10 +1054,12 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                             ube_predictions = config.inverse_ube_transform(ube_predictions).squeeze()
 
                     network_output_recur_left = model.recurrent_inference(hidden_states,
-                                                                          (hidden_states_c_reward, hidden_states_h_reward),
+                                                                          (hidden_states_c_reward,
+                                                                           hidden_states_h_reward),
                                                                           actions_left)
                     network_output_recur_right = model.recurrent_inference(hidden_states,
-                                                                           (hidden_states_c_reward, hidden_states_h_reward),
+                                                                           (hidden_states_c_reward,
+                                                                            hidden_states_h_reward),
                                                                            actions_right)
 
                 if 'rnd' in config.uncertainty_architecture_type:
@@ -1096,10 +1168,11 @@ def debug_unrolled_uncertainty(config, visitation_counter, model, training_step)
         assert stack_obs.shape == (num_trajectories, 1, env_size, env_size)
 
         # Setup actions for true right and only zero trajectories
-        true_right_actions = np.zeros(shape=(planning_horizon, num_trajectories))    # Actions will be an array of shape [planning_horizon, num_trajectories, 1]
+        true_right_actions = np.zeros(shape=(planning_horizon,
+                                             num_trajectories))  # Actions will be an array of shape [planning_horizon, num_trajectories, 1]
         true_left_actions = np.zeros(shape=(planning_horizon, num_trajectories))
         for trajectory in range(num_trajectories):  # For each batched trajectory
-            for unroll_step in range(planning_horizon):   # for each unroll step
+            for unroll_step in range(planning_horizon):  # for each unroll step
                 row, column = trajectory + unroll_step, trajectory + unroll_step
                 action_right = visitation_counter.identify_action_right(row, column)
                 row, column = trajectory + unroll_step, np.clip(trajectory - unroll_step, a_min=0, a_max=trajectory + 1)
@@ -1163,7 +1236,8 @@ def debug_unrolled_uncertainty(config, visitation_counter, model, training_step)
 
         reward_unc_left = torch.from_numpy(np.stack(reward_unc_left))
         value_unc_left = torch.from_numpy(np.stack(value_unc_left))
-        state_prediction_left = torch.from_numpy(np.stack(state_prediction_left))   # expected shape [planning_horizon, num_trajectories, env_size, env_size]
+        state_prediction_left = torch.from_numpy(
+            np.stack(state_prediction_left))  # expected shape [planning_horizon, num_trajectories, env_size, env_size]
 
         reward_unc_right = torch.from_numpy(np.stack(reward_unc_right))
         value_unc_right = torch.from_numpy(np.stack(value_unc_right))
@@ -1176,12 +1250,12 @@ def debug_unrolled_uncertainty(config, visitation_counter, model, training_step)
                                                      f"value_unc_right.shape = {value_unc_right.shape}, " \
                                                      f"(planning_horizon, num_trajectories) = " \
                                                      f"{(planning_horizon, num_trajectories)}"
-        assert state_prediction_right.shape == state_prediction_left.shape == (planning_horizon, num_trajectories, 1,
-                                                                               env_size, env_size), \
-            f"state_prediction_right.shape = {state_prediction_right.shape}, state_prediction_left.shape = " \
-            f"{state_prediction_left.shape}, \n " \
-            f"(planning_horizon, num_trajectories, env_size, env_size) = " \
-            f"{(planning_horizon, num_trajectories, env_size, env_size)}"
+        # assert state_prediction_right.shape == state_prediction_left.shape == (planning_horizon, num_trajectories, 1,
+        #                                                                        env_size, env_size), \
+        #     f"state_prediction_right.shape = {state_prediction_right.shape}, state_prediction_left.shape = " \
+        #     f"{state_prediction_left.shape}, \n " \
+        #     f"(planning_horizon, num_trajectories, env_size, env_size) = " \
+        #     f"{(planning_horizon, num_trajectories, env_size, env_size)}"
 
         # assuming gamma = 1
         propagated_value_unc_l = reward_unc_left.sum(dim=0) + value_unc_left[-1]

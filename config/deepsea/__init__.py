@@ -30,7 +30,7 @@ class DeepSeaConfig(BaseConfig):
             dirichlet_alpha=0.3,
             value_delta_max=0.01,
             num_simulations=50,
-            batch_size=128,  # 32 # 64 # 256
+            batch_size=64,  # 32 # 64 # 256
             td_steps=5,     # 5, 10, 3, 1
             num_actors=1,
             # network initialization/ & normalization
@@ -42,7 +42,7 @@ class DeepSeaConfig(BaseConfig):
             image_based=False,   #
             # lr scheduler
             lr_warm_up=0.01,
-            lr_init=1E-3,    # torch_amp=0.2, none=1E-3,
+            lr_init=0.5 * 1E-3,    # torch_amp=0.2, none=1E-3,
             lr_decay_rate=0.1,     # 0.1
             lr_decay_steps=100 * 1000,
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
@@ -86,7 +86,7 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            ube_td_steps=5,
+            ube_td_steps=3,
             reset_ube_interval=6000,
             rnd_scale=0.01,
             ube_support=DiscreteSupport(-10, 10, delta=1),
@@ -97,9 +97,8 @@ class DeepSeaConfig(BaseConfig):
         self.bn_mt = 0.1
 
         # Fullyconnected arch. specs
-        self.identity_representation = True
-        self.fc_representation_layers = [128, 128]
-        self.fc_state_prediction_layers = [] # [64] [128, 128, 128]
+        self.fc_representation_layers = [1024]
+        self.fc_state_prediction_layers = [1024, 1024, 1024] # [64] [128, 128, 128]
         self.fc_state_prediction_prior_layers = [128, 128, 128] # [128, 128, 128]
         self.fc_reward_layers = [128, 128] # [64, 64], [128, 128]
         self.fc_reward_prior_layers = [256, 128]    # [128, 128]
@@ -125,11 +124,21 @@ class DeepSeaConfig(BaseConfig):
         self.evaluate_uncertainty_at = [1000, 5000, 10000, 20000]
 
         self.representation_based_training = False   # For deep sea, changes muzero training to be based on
+
+        self.representation_type = 'concatted'  # options: 'learned', 'identity', 'concatted', 'encoder'
+        self.use_softened_one_step_loss = False
+        self.softening_coeff = 0.1  # Additive "noise" to deep_sea observations in training
+        self.running_loss_coeff = 0.5   # Relative loss factor for unrolled consistency loss in deep_sea
+        self.one_step_loss_coeff = 2.0  # Relative loss factor for one-step consistency loss in deep_sea
+        self.softened_one_step_loss_coeff = 0.5 * self.running_loss_coeff   # Relative loss factor for softenend
+        # one-step consistency loss in deep_sea
+
         # representations of true states, not hidden states
 
         # To reduce the effect of the policy on the selection, we reduce pb_c_init to 0.5.
         # This should give the policy about half the weight
         # self.pb_c_init = 0.5 # 1.25
+
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         # With mu explore in deep sea, we don't want to rely on random action selection
@@ -162,7 +171,7 @@ class DeepSeaConfig(BaseConfig):
         model = FullyConnectedEfficientExploreNet(
             self.obs_shape,
             self.action_space_size,
-            self.identity_representation,
+            self.representation_type,
             self.fc_representation_layers,
             self.fc_state_prediction_layers,
             self.fc_state_prediction_prior_layers,
@@ -194,7 +203,6 @@ class DeepSeaConfig(BaseConfig):
             ensemble_size=self.ensemble_size,
             use_prior=self.use_prior,
             prior_scale=self.prior_scale,
-            use_encoder=self.use_encoder,
             encoder_layers=self.encoder_layers,
             encoding_size=self.encoding_size,
             categorical_ube=self.categorical_ube,
