@@ -567,11 +567,15 @@ class BaseConfig(object):
             if not self.learned_model:
                 self.do_consistency = False  # Consistency loss only makes sense with a learned model.
             self.deepsea_randomize_actions = not args.det_deepsea_actions
-            if args.learned_representation:
-                self.representation_type = 'learned'
 
             if args.representation_based_training:
                 self.representation_based_training = args.representation_based_training
+
+            if args.representation_type is not None and self.learned_model:
+                self.representation_type = args.representation_type
+            elif not self.learned_model:
+                self.representation_type = 'identity'
+
 
         # MuExplore:
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
@@ -639,7 +643,9 @@ class BaseConfig(object):
         localtime = time.asctime(time.localtime(time.time()))
         if self.mu_explore:
             seed_tag = 'mu_explore_seed={}'.format(self.seed)
-        elif self.use_uncertainty_architecture:
+        elif self.use_deep_exploration:
+            seed_tag = 'deep_exploration_no_muexp_seed={}'.format(self.seed)
+        elif self.use_uncertainty_architecture and 'ensemble' in self.uncertainty_architecture_type:
             seed_tag = 'ensemble_baseline_seed={}'.format(self.seed)
         else:
             seed_tag = 'baseline_seed={}'.format(self.seed)

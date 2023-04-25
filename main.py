@@ -107,8 +107,6 @@ if __name__ == '__main__':
     parser.add_argument('--q_based_action_selection', action='store_true', default=False,
                         help="If true, uses select_q_based_action from utils instead of standard select_action."
                              "select_q_based_action computes action based on Q vals regularized by visitations.")
-    parser.add_argument('--learned_representation', action='store_true', default=False,
-                        help="Only applicable to deep_sea. If false, uses identity representation")
     parser.add_argument('--prior_scale', type=float, default=None,
                         help='The scale of the prior, >= 0. If not specified, reverts to the prior specified in the '
                              'config file.')
@@ -119,6 +117,12 @@ if __name__ == '__main__':
     parser.add_argument('--use_deep_exploration', action='store_true', default=False,
                         help="If true, uses deep exploration based on either UBE or MuExplore. Always true if MuExplore, "
                              "otherwise only applicable with UBE.")
+    parser.add_argument('--representation_type', required=False,
+                        choices=['learned', 'identity', 'concatted', 'encoder'], default=None,
+                        help="What kind of representation function will be used with Deep_Sea. "
+                             "learned: standard MuZero. identity: the identity function. "
+                             "concatted: Transforms the N * N 1_hot deep see to 2 * N, first N is a 1_hot row, and "
+                             "second N is 1_hot column. encoder: a randomly initialized untrained NN.")
 
     # Process arguments
     args = parser.parse_args()

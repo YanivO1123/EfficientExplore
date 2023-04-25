@@ -132,6 +132,8 @@ class DataWorker(object):
                                                        randomize_actions=self.config.deepsea_randomize_actions)
             previous_visitation_counts = np.zeros(shape=(self.config.env_size, self.config.env_size))
             print(f"Initiated visitation counter", flush=True)
+        unique_states_visited_so_far = []
+        transitions_so_far = []
 
         try:
             def _get_max_entropy(action_space):
@@ -493,10 +495,18 @@ class DataWorker(object):
                                             f"value uncertainties: max = {value_unc_max}, min = {value_unc_min}, mean = "
                                             f"{value_unc_sum / value_unc_count} \n"
                                             , flush=True)
-
-
+                                if self.visitation_counter is not None:
+                                    if total_transitions % self.config.env_size == 0:
+                                        number_of_unique_states = np.count_nonzero(self.visitation_counter.s_counts)
+                                        unique_states_visited_so_far.append(number_of_unique_states)
+                                        transitions_so_far.append(total_transitions)
+                                        np.save(self.config.exp_path + "/states_visited_per_step",
+                                                np.asarray(unique_states_visited_so_far))
+                                        np.save(self.config.exp_path + "/steps_for_states_visited",
+                                                np.asarray(transitions_so_far))
                             except:
                                 traceback.print_exc()
+
 
                             # clip the reward
                             if self.config.clip_reward:
@@ -522,7 +532,9 @@ class DataWorker(object):
                                 np.save(self.config.exp_path + f"/sa_counts_at_step_{total_transitions}",
                                         np.asarray(current_sa_counts))
 
-                            if self.config.evaluate_uncertainty and total_transitions in self.config.evaluate_uncertainty_at:
+                            if 'deep_sea' in self.config.env_name and self.config.evaluate_uncertainty and \
+                                    total_transitions in self.config.evaluate_uncertainty_at and \
+                                    self.config.use_deep_exploration:
                                 try:
                                     self.evaluate_uncertainty(model=model, step_count=total_transitions)
                                 except:
@@ -817,27 +829,26 @@ class DataWorker(object):
                 policy_logits_pool = [np.ones_like(policy_logits_pool[0]).tolist()
                                       for _ in range(len(policy_logits_pool))]
 
-            # Init Exploratory CRoots and prepare them exploratorily
-            roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations,
-                                 self.config.beta, batch_size)
-            roots.prepare_explore(self.config.root_exploration_fraction, noises, value_prefix_pool,
-                                  policy_logits_pool, value_prefix_variance_pool, self.config.beta,
-                                  batch_size)
+            roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations_ube)
+            roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_variance_pool, policy_logits_pool)
+            MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots,
+                                     propagating_uncertainty=True)
 
-            # Call MCTS:
-            # We ONLY propagate uncertainty. What is the estimate at the root?
-            MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=True)
             roots_distributions = roots.get_distributions()
+            # We ran MCTS with respect to ONLY the uncertainty, so value IS the uncertainty
+            roots_uncertainties = roots.get_values()
+            children_uncertainties = roots.get_roots_children_values(self.config.discount)
+
             # roots_values = roots.get_values()
             # children_values = roots.get_roots_children_values(self.config.discount)
-            roots_uncertainties = roots.get_values_uncertainty()
-            children_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)
+            # roots_uncertainties = roots.get_values_uncertainty()
+            # children_uncertainties = roots.get_roots_children_uncertainties(self.config.discount)
 
             state_uncertainties = np.asarray(roots_uncertainties).reshape(env_size, env_size)
             state_action_uncertainties = np.asarray(children_uncertainties).reshape(env_size, env_size,
                                                                                     self.config.action_space_size)
         else:
-            state_uncertainties = network_output.value_variance.reshape(env_size, env_size).cpu().numpy()
+            state_uncertainties = network_output.value_variance.reshape(env_size, env_size)
 
             hidden_states = torch.from_numpy(network_output.hidden_state).float().to(self.device)
             actions_zero = torch.zeros(size=(env_size * env_size, 1)).long().to(self.device)
@@ -865,9 +876,9 @@ class DataWorker(object):
                                                                 hidden_states_h_reward),
                                                                actions_one)
 
-            state_action_uncertainties = torch.stack((network_output_action_zero.value_variance.reshape(env_size, env_size),
+            state_action_uncertainties = np.stack((network_output_action_zero.value_variance.reshape(env_size, env_size),
                                                       network_output_action_one.value_variance.reshape(env_size, env_size)),
-                                                     dim=-1).cpu().numpy()
+                                                     axis=-1)
 
         assert np.shape(state_action_uncertainties) == (env_size, env_size, 2) and \
                np.shape(state_uncertainties) == (env_size, env_size), f"state_action_uncertainties shape is " \

@@ -2,6 +2,7 @@ import ray
 import time
 
 import numpy as np
+import traceback
 
 
 @ray.remote
@@ -97,8 +98,21 @@ class ReplayBuffer(object):
         probs = self.priorities ** self._alpha
 
         probs /= probs.sum()
+
         # sample data
-        indices_lst = np.random.choice(total, batch_size, p=probs, replace=False)
+        ## In deep sea, we leave the last number_of_fresh_trajectories batch-trajectories to be fresh from last episode
+        number_of_fresh_trajectories = 4
+        start_after_N_episodes = 40
+        if 'deep_sea' in self.config.env_name and batch_size > 16 and total > start_after_N_episodes * self.config.env_size:
+            try:
+                indices_lst = np.random.choice(total, batch_size - number_of_fresh_trajectories, p=probs, replace=False).tolist()
+                last_episode_indexes = np.arange(start=total - self.config.env_size, stop=total, dtype=int)
+                indices_lst += np.random.choice(last_episode_indexes, number_of_fresh_trajectories, replace=False).tolist()
+                indices_lst = np.asarray(indices_lst)
+            except:
+                traceback.print_exc()
+        else:
+            indices_lst = np.random.choice(total, batch_size, p=probs, replace=False)
 
         weights_lst = (total * probs[indices_lst]) ** (-beta)
         weights_lst /= weights_lst.max()

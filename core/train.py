@@ -384,7 +384,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                         previous_one_step_state = hidden_state
 
                     # 1-step consistency losses
-                    if step_i > 0:
+                    if step_i > 0 and config.use_one_step_losses:
                         # Compute the 1 step state
                         flattened_hidden_state, _, _ = model.dynamics_network(previous_reward_hidden,
                                                                               previous_presentation_state.

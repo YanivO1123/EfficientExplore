@@ -488,6 +488,76 @@ class BatchWorker_GPU(object):
                                                        mapping_seed=self.config.seed,
                                                        fake=self.config.plan_with_fake_visit_counter)
 
+    def get_ube_bootstrap(self, ube_obs_lst, batch_size, device):
+        m_batch = self.config.mini_infer_size
+        slices = np.ceil(batch_size / m_batch).astype(np.int_)
+        ube_lst = []
+        for i in range(slices):
+            beg_index = m_batch * i
+            end_index = m_batch * (i + 1)
+            if self.config.image_based:
+                m_obs = torch.from_numpy(ube_obs_lst[beg_index:end_index]).to(device).float() / 255.0
+            else:
+                m_obs = torch.from_numpy(ube_obs_lst[beg_index:end_index]).to(device).float()
+            if self.config.amp_type == 'torch_amp':
+                with autocast():
+                    # Compute initial inference
+                    _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(m_obs)
+                    state = torch.from_numpy(np.asarray(state)).to(device).float()
+                    hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
+                        device)
+                    hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
+                        device)
+                    across_actions_ubes = []
+                    # Compute recurrent inference for every possible action iteratively
+                    for action in range(self.config.action_space_size):
+                        actions = torch.ones(size=(state.shape[0], 1)).to(device).long() * action
+                        recurrent_output_per_action = self.model.recurrent_inference(state,
+                                                                                     (hidden_states_c_reward,
+                                                                                      hidden_states_h_reward),
+                                                                                     actions)
+                        # Sum the reward + gamma ** 2 value uncertainty for each action
+                        local_ube = recurrent_output_per_action.value_prefix_variance + \
+                                    recurrent_output_per_action.value_variance * self.config.discount ** 2
+                        across_actions_ubes.append(local_ube)
+
+                    # Stack all the local UBEs across the action dimension and compute the max across actions
+                    slice_ubes = np.amax(np.stack(across_actions_ubes, axis=0), axis=0)
+            else:
+                # Compute initial inference
+                _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(m_obs)
+                state = torch.from_numpy(np.asarray(state)).to(device).float()
+                hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
+                    device)
+                hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
+                    device)
+                across_actions_ubes = []
+                # Compute recurrent inference for every possible action iteratively
+                for action in range(self.config.action_space_size):
+                    actions = torch.ones(size=(state.shape[0], 1)).to(device).long() * action
+                    recurrent_output_per_action = self.model.recurrent_inference(state,
+                                                              (hidden_states_c_reward, hidden_states_h_reward),
+                                                              actions)
+                    # Sum the reward + gamma ** 2 value uncertainty for each action
+                    local_ube = recurrent_output_per_action.value_prefix_variance + \
+                                recurrent_output_per_action.value_variance * self.config.discount ** 2
+                    across_actions_ubes.append(local_ube)
+
+                # Stack all the local UBEs across the action dimension and compute the max across actions
+                slice_ubes = np.amax(np.stack(across_actions_ubes, axis=0), axis=0)
+
+            # append the results
+            ube_lst.append(slice_ubes)
+
+        # The length of ube_lst should be the number of slices in the (batch size * trajectory length + 1)
+        ube_lst = np.asarray(ube_lst).reshape(-1)
+
+        assert len(ube_obs_lst) == len(ube_lst), f"Expecting the number of UBE observations to match the number of " \
+                                                 f"UBE bootstraps, and got: len(ube_obs_lst) = {len(ube_obs_lst)} " \
+                                                 f"and len(ube_lst) = {len(ube_lst)}"
+
+        return ube_lst
+
     def _prepare_ube(self, ube_context):
         """
             Takes a UBE context, and returns batch of UBE targets.
@@ -551,7 +621,7 @@ class BatchWorker_GPU(object):
                         np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
                 ube_lst = ube_lst * np.array(ube_mask)
                 ube_lst = ube_lst.tolist()
-            else:
+            elif self.config.use_root_value and self.config.mu_explore:
                 # split a full batch into slices of mini_infer_size: to save the GPU memory for more GPU actors
                 m_batch = self.config.mini_infer_size
                 slices = np.ceil(batch_size / m_batch).astype(np.int_)
@@ -613,36 +683,83 @@ class BatchWorker_GPU(object):
                 # [config.batch_size * (config.num_unroll_steps + 1) * config.ube_td_steps]
                 rewards_uncertainty_lst = concat_output_reward_variance(network_output_reward_uncertainties)
 
-                # For correct comparison, root_value cannot be used as bootstrap target when MuExplore is not used
-                if self.config.use_root_value and self.config.mu_explore:
-                    # use the root values from MCTS. We propagate uncertainty instead of value and reward using a
-                    # discount ** 2
-                    value_variance_pool, value_prefix_variance_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_uncertainty_output(
-                        network_output_ube)
-                    value_prefix_variance_pool = value_prefix_variance_pool.squeeze().tolist()
-                    policy_logits_pool = policy_logits_pool.tolist()
-                    # To reduce cost, compute ube_targets w. MCTS trees w. budget num_simulations_ube < num_simulations
-                    roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations_ube)
-                    noises = [
-                        np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
-                            np.float32).tolist() for _ in range(batch_size)]
-                    # TODO: Do I really want to create NOISY roots as targets?
-                    roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_variance_pool, policy_logits_pool)
-                    MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots, propagating_uncertainty=True)
-                    # We have propagated only uncertainty through this tree, so the uncertainty information is in the
-                    # node values.
-                    children_of_root_value_uncertainties = np.asarray(roots.get_roots_children_values(self.config.discount))
-                    max_child_uncertainty = children_of_root_value_uncertainties.max(axis=-1)
-                    ube_lst = np.array(max_child_uncertainty)
-                else:
-                    # use the nn-predicted ube_uncertainties
-                    ube_lst = concat_output_value_variance(network_output_ube)
+                # use the root values from MCTS. We propagate uncertainty instead of value and reward using a
+                # discount ** 2
+                value_variance_pool, value_prefix_variance_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_uncertainty_output(
+                    network_output_ube)
+                value_prefix_variance_pool = value_prefix_variance_pool.squeeze().tolist()
+                policy_logits_pool = policy_logits_pool.tolist()
+                # To reduce cost, compute ube_targets w. MCTS trees w. budget num_simulations_ube < num_simulations
+                roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations_ube)
+                noises = [
+                    np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
+                        np.float32).tolist() for _ in range(batch_size)]
+                # TODO: Do I really want to create NOISY roots as targets?
+                roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_variance_pool, policy_logits_pool)
+                MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots, propagating_uncertainty=True)
+                # We have propagated only uncertainty through this tree, so the uncertainty information is in the
+                # node values.
+                children_of_root_value_uncertainties = np.asarray(roots.get_roots_children_values(self.config.discount))
+                max_child_uncertainty = children_of_root_value_uncertainties.max(axis=-1)
+                ube_lst = np.array(max_child_uncertainty)
 
                 # get last state ube
                 ube_lst = ube_lst.reshape(-1) * (   # UBE targets are discounted ** 2
                             np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
                 ube_lst = ube_lst * np.array(ube_mask)
                 ube_lst = ube_lst.tolist()
+            else:
+                # Get the UBE bootstrap from max (u_r + gamma ** 2 u_v_next)
+                ube_lst = self.get_ube_bootstrap(ube_obs_lst, batch_size, device)
+
+                # Already flattened, just need to multiply by discount
+                ube_lst = ube_lst * (  # UBE targets are discounted ** 2
+                        np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
+                ube_lst = ube_lst * np.array(ube_mask)
+                ube_lst = ube_lst.tolist()
+
+                # Get the reward uncertainties
+                m_batch = self.config.mini_infer_size
+                slices = np.ceil(batch_size_reward_uncertainties / m_batch).astype(np.int_)
+                network_output_reward_uncertainties = []
+                actions = torch.from_numpy(np.asarray(actions)).to(device).unsqueeze(1).long()
+                for i in range(slices):
+                    beg_index = m_batch * i
+                    end_index = m_batch * (i + 1)
+                    if self.config.image_based:
+                        rewards_uncertainty_obs = torch.from_numpy(rewards_uncertainty_obs_lst[beg_index:end_index]).to(
+                            device).float() / 255.0
+                    else:
+                        rewards_uncertainty_obs = torch.from_numpy(rewards_uncertainty_obs_lst[beg_index:end_index]).to(
+                            device).float()
+                    if self.config.amp_type == 'torch_amp':
+                        with autocast():
+                            # Compute initial_inference for the hidden state and reward
+                            _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(rewards_uncertainty_obs)
+                            state = torch.from_numpy(np.asarray(state)).to(device).float()
+                            hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
+                                device)
+                            hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
+                                device)
+                            # Compute recurrent_inference for reward_rnd (or ensemble reward variance) prediction
+                            r_output = self.model.recurrent_inference(state,
+                                                                      (hidden_states_c_reward, hidden_states_h_reward),
+                                                                      actions[beg_index:end_index])
+                    else:
+                        _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(rewards_uncertainty_obs)
+                        state = torch.from_numpy(np.asarray(state)).to(device).float()
+                        hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
+                            device)
+                        hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
+                            device)
+                        r_output = self.model.recurrent_inference(state,
+                                                                  (hidden_states_c_reward, hidden_states_h_reward),
+                                                                  actions[beg_index:end_index])
+                    network_output_reward_uncertainties.append(r_output)
+
+                # Rewards uncertainty_lst is expected to be of shape:
+                # [config.batch_size * (config.num_unroll_steps + 1) * config.ube_td_steps]
+                rewards_uncertainty_lst = concat_output_reward_variance(network_output_reward_uncertainties)
 
             # Compute the UBE target based on the discount ** 2ed sum of reward uncertainties and
             # (discount ** 2n) * ube_bootstrap
