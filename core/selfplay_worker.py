@@ -386,7 +386,7 @@ class DataWorker(object):
                         if not self.config.standard_action_selection and start_training and not self.config.mu_explore \
                                 and 'ube' in self.config.uncertainty_architecture_type and self.config.use_deep_exploration:
                             # Organized as [actions, environments]
-                            ube_predictions = self.get_ube_predictions(hidden_state_roots, reward_hidden_roots, env_nums, model)
+                            ube_predictions = self.get_ube_predictions(hidden_state_roots, reward_hidden_roots, env_nums, model, initial_observations_for_counter)
 
                         for i in range(env_nums):
                             deterministic = False
