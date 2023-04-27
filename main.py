@@ -53,9 +53,10 @@ if __name__ == '__main__':
     parser.add_argument('--load_model', action='store_true', default=False, help='choose to load model')
     parser.add_argument('--model_path', type=str, default='./results/test_model.p', help='load model path')
     parser.add_argument('--object_store_memory', type=int, default=None, help='object store memory') # original default=150 * 1024 * 1024 * 1024
-    parser.add_argument('--cluster', action='store_true', default=False,
-                        help="Is used for switching experiment configurations between debugging (local, False) and final "
-                             "(computation cluster, True)")
+    # To distinguish local vs. cluster deployment
+    parser.add_argument('--cluster', required=False, choices=['delft_blue', 'hpc', 'none'], default='none',
+                        help="Used to setup different parameters per cluster used.")
+    # MuExplore parameters
     parser.add_argument('--beta', type=float, default=None, help='Exploration / exploitation parameter, takes float >= 0')
     parser.add_argument('--mu_explore', action='store_true', default=False,
                         help="Use MuExplore (exploratory MCTS), or not.")
@@ -66,12 +67,6 @@ if __name__ == '__main__':
                              "If false, can be too policy-biased and not provide effective exploration.")
     parser.add_argument('--exploration_fraction', type=float, default=0.25,
                         help='noise magnitude to add to nodes in MCTS. Defaults to 0.25 used by EffZero')
-    parser.add_argument('--visit_counter', action='store_true', default=False,
-                        help="If the env. is deep sea, use the visit counter for uncertainty estimation. "
-                             "Otherwise, does nothing.")
-    parser.add_argument('--p_w_vis_counter', action='store_true', default=False,
-                        help="If the env. is deep sea, use the visit counter in MCTS planning with muexplore. "
-                             "Otherwise, does nothing.")
     parser.add_argument('--use_max_value_targets', action='store_true', default=False,
                         help="Use max targets in exploratory episodes. Only applicable with MuExplore. If not specified,"
                              "uses use_max_value_targets from the config (which defaults to false unless set otherwise)")
@@ -79,28 +74,42 @@ if __name__ == '__main__':
                         help="Use max policy targets from max value targets in exploratory episodes. Only applicable "
                              "with MuExplore AND use_max_value_targets. If not specified, "
                              "uses use_max_value_targets from the config (which defaults to false unless set otherwise)")
+    parser.add_argument('--uncertainty_architecture_type', required=False,
+                        choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube', 'ube', 'none'], default='none',
+                        help="Decides the type of uncertainty to be used. No all are implemented for every env.")
+    # Deep_sea specific parameters
+    parser.add_argument('--visit_counter', action='store_true', default=False,
+                        help="If the env. is deep sea, use the visit counter for uncertainty estimation. "
+                             "Otherwise, does nothing.")
+    parser.add_argument('--p_w_vis_counter', action='store_true', default=False,
+                        help="If the env. is deep sea, use the visit counter in MCTS planning with muexplore. "
+                             "Otherwise, does nothing.")
     parser.add_argument('--plan_w_fake_visit_counter', action='store_true', default=False,
                         help="For debugging. If true, unc. associated with rewarding state is always maximized")
     parser.add_argument('--plan_w_state_visits', action='store_true', default=False,
                         help="If true uses state visits. Otherwise, will use state-action visits."
-                             "Only relevant if uses p_w_vis_counter, ")
-    parser.add_argument('--uncertainty_architecture_type', required=False, choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube', 'none'], default='none',
-                        help="Decides the type of uncertainty to be used.")
+                             "Only relevant if uses p_w_vis_counter.")
     parser.add_argument('--number_of_exploratory_envs', type=int, default=None, help='If MuExplore, number of environments <= p_mcts_num that'
                                                                                      'are exploratory')
     parser.add_argument('--det_deepsea_actions', action='store_true', default=False,
                         help="If true, use determinstic deep sea actions ")
-    parser.add_argument('--architecture_type', required=False,
-                        choices=['resnet', 'fully_connected'], default='resnet',
-                        help="Resnet (original), and fully-connected (custom and only applicable to Deep Sea). "
-                             "Only important to specify in environments that implement multiple architectures. "
-                             "Currently, none.")
     parser.add_argument('--sampling_times', type=int, default=30, help='If MuExplore and visitation counter, '
                                                                       'whether to use the sampled value '
                                                                       'propagation or not. Defaults to not')
     parser.add_argument('--alpha_zero_planning', action='store_true', default=False,
                         help="Only applied to deep_sea. If true, the dynamics model is not learned, but the true model "
                              "is used instead. Does not modify reward or value learning.")
+    parser.add_argument('--representation_based_training', action='store_true', default=False,
+                        help="If true, modifies MuZero's training. The reward, value and policy prediction are trained "
+                             "over representation prediction of the true observation, rather than of the next_state "
+                             "output-ed by the transition-dynamics function. Only implemented for Deep Sea.")
+    parser.add_argument('--representation_type', required=False,
+                        choices=['learned', 'identity', 'concatted', 'encoder'], default=None,
+                        help="What kind of representation function will be used with Deep_Sea. "
+                             "learned: standard MuZero. identity: the identity function. "
+                             "concatted: Transforms the N * N 1_hot deep see to 2 * N, first N is a 1_hot row, and "
+                             "second N is 1_hot column. encoder: a randomly initialized untrained NN.")
+    # Other
     parser.add_argument('--periodic_ube_weight_reset', action='store_true', default=False,
                         help="If ube and periodic_ube_weight_reset, reset ube network weights every reset_ube_interval "
                              "learning steps.")
@@ -110,19 +119,9 @@ if __name__ == '__main__':
     parser.add_argument('--prior_scale', type=float, default=None,
                         help='The scale of the prior, >= 0. If not specified, reverts to the prior specified in the '
                              'config file.')
-    parser.add_argument('--representation_based_training', action='store_true', default=False,
-                        help="If true, modifies MuZero's training. The reward, value and policy prediction are trained "
-                             "over representation prediction of the true observation, rather than of the next_state "
-                             "output-ed by the transition-dynamics function. Only implemented for Deep Sea.")
     parser.add_argument('--use_deep_exploration', action='store_true', default=False,
                         help="If true, uses deep exploration based on either UBE or MuExplore. Always true if MuExplore, "
                              "otherwise only applicable with UBE.")
-    parser.add_argument('--representation_type', required=False,
-                        choices=['learned', 'identity', 'concatted', 'encoder'], default=None,
-                        help="What kind of representation function will be used with Deep_Sea. "
-                             "learned: standard MuZero. identity: the identity function. "
-                             "concatted: Transforms the N * N 1_hot deep see to 2 * N, first N is a 1_hot row, and "
-                             "second N is 1_hot column. encoder: a randomly initialized untrained NN.")
 
     # Process arguments
     args = parser.parse_args()

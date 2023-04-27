@@ -48,10 +48,10 @@ class DeepSeaConfig(BaseConfig):
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=500,   # 500 400 32 5000 1000
+            start_transitions=200,   # 500 400 32 5000 1000
             total_transitions=50 * 1000,
             transition_num=1,
-            do_consistency=True,
+            do_consistency=False,
             # frame skip & stack observation
             frame_skip=1,
             stacked_observations=1,     # 4 2
@@ -97,8 +97,8 @@ class DeepSeaConfig(BaseConfig):
         self.bn_mt = 0.1
 
         # Fullyconnected arch. specs
-        self.fc_representation_layers = [128]
-        self.fc_state_prediction_layers = [1024, 1024, 1024] # [64] [128, 128] [1024, 1024, 1024]
+        self.fc_representation_layers = [512, 512]
+        self.fc_state_prediction_layers = [512, 512, 512] # [1024, 1024, 1024] # [64] [128, 128] [1024, 1024, 1024]
         self.fc_state_prediction_prior_layers = [128, 128, 128] # [128, 128, 128]
         self.fc_reward_layers = [128, 128] # [64, 64], [128, 128]
         self.fc_reward_prior_layers = [256, 128]    # [128, 128]
@@ -211,36 +211,37 @@ class DeepSeaConfig(BaseConfig):
             ube_support_size=self.ube_support.size,
         )
 
-        if 'rnd' in self.uncertainty_architecture_type:
-            for p in model.value_rnd_target_network.parameters():
-                p.requires_grad = False
-                p *= 4
-            for p in model.reward_rnd_target_network.parameters():
-                p.requires_grad = False
-                p *= 4
-        if 'ensemble' in self.uncertainty_architecture_type:
-            if not self.learned_model:
-                model.dynamics_network.fc.apply(fn=init_kaiming_trunc_haiku)
-                model.value_network.apply(fn=init_kaiming_trunc_haiku)
-            if self.use_prior:
+        with torch.no_grad():
+            if 'rnd' in self.uncertainty_architecture_type:
+                for p in model.value_rnd_target_network.parameters():
+                    p.requires_grad = False
+                    p *= 4
+                for p in model.reward_rnd_target_network.parameters():
+                    p.requires_grad = False
+                    p *= 4
+            if 'ensemble' in self.uncertainty_architecture_type:
                 if not self.learned_model:
-                    model.dynamics_network.fc_net_prior.apply(fn=init_kaiming_trunc_haiku)
-                    model.value_network_prior.apply(fn=init_kaiming_trunc_haiku)
-                for p in model.dynamics_network.fc_net_prior.parameters():
+                    model.dynamics_network.fc.apply(fn=init_kaiming_trunc_haiku)
+                    model.value_network.apply(fn=init_kaiming_trunc_haiku)
+                if self.use_prior:
+                    if not self.learned_model:
+                        model.dynamics_network.fc_net_prior.apply(fn=init_kaiming_trunc_haiku)
+                        model.value_network_prior.apply(fn=init_kaiming_trunc_haiku)
+                    for p in model.dynamics_network.fc_net_prior.parameters():
+                        p.requires_grad = False
+                        p *= 2
+                    for p in model.value_network_prior.parameters():
+                        p.requires_grad = False
+                        p *= 2
+            if self.use_encoder:
+                model.representation_encoder.apply(fn=init_kaiming_trunc_haiku)
+                for p in model.representation_encoder.parameters():
                     p.requires_grad = False
                     p *= 2
-                for p in model.value_network_prior.parameters():
-                    p.requires_grad = False
+            if 'learned' in self.representation_type:
+                model.representation_network.apply(fn=init_kaiming_trunc_haiku)
+                for p in model.representation_network.parameters():
                     p *= 2
-        # if self.learned_model:
-        #     with torch.no_grad():
-        #         for p in model.dynamics_network.state_prediction_net.parameters():
-        #             p *= 2
-        if self.use_encoder:
-            model.representation_encoder.apply(fn=init_kaiming_trunc_haiku)
-            for p in model.representation_encoder.parameters():
-                p.requires_grad = False
-                p *= 2
 
         return model
 

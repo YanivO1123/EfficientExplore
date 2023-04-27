@@ -11,7 +11,7 @@ class CountUncertainty:
         Uncertainty will be scaled by 'scale'.
         Only implemented for the deep_sea environment
     """
-    def __init__(self, name, num_envs, mapping_seed, scale=1, epsilon=0.001, fake=False, randomize_actions=True):
+    def __init__(self, name, num_envs, mapping_seed, scale=1, epsilon=0.01, fake=False, randomize_actions=True):
         """
             name: the name of the env (deep_sea/N)
             num_envs: num of parallel envs for planning with MCTS
@@ -100,11 +100,11 @@ class CountUncertainty:
             # The shape of the expected input is:
             # (height, width)
             row, column = self.from_one_hot_state_to_indexes(state)
-            if row < 0 or column < 0:
-                raise ValueError(f"Tried to observe the 'null' state. State was: {state}")
-            self.s_counts[row, column] += 1
-            self.sa_counts[row, column, action] += 1
-            self.observation_counter += 1
+            # If the state is not the null state
+            if row >= 0 and column >= 0:
+                self.s_counts[row, column] += 1
+                self.sa_counts[row, column, action] += 1
+                self.observation_counter += 1
         # Alternatively, if we got a state in indexes form
         elif len(state) == 2 and not len(np.shape(state)) == 2:
             assert state[0] < self.size and state[0] < self.size
@@ -236,7 +236,7 @@ class CountUncertainty:
                 # get the indexes
                 return self.planning_env.get_state()
 
-    def state_action_uncertainty(self, index_row, index_column, action, use_state_visits=True):
+    def state_action_uncertainty(self, index_row, index_column, action, use_state_visits=False):
         """
             Returns the uncertainty with state-action visitation pair, or with next-state visitations.
             If fake_reward_uncertainty is true, returns max uncertainty with rewarding state always, regardless of count
@@ -261,7 +261,7 @@ class CountUncertainty:
 
     def get_reward_uncertainty(self, state, action, use_state_visits=False):
         """
-            If state is an array of shape (num_envs, height, width) = (4, 10, 10) and action a list of
+            If state is an array of shape (num_envs, height, width) and action a list of
             len num_envs:
                 We return a list of uncertainties, of length num_envs, and all but the last observation in each stack is
                 ignored
@@ -281,7 +281,7 @@ class CountUncertainty:
             reward_uncertainties = []
             for i in range(len(state)):
                 row, column = state[i]
-                reward_uncertainty = self.state_action_uncertainty(row, column, action[i])
+                reward_uncertainty = self.state_action_uncertainty(row, column, action[i], use_state_visits)
                 reward_uncertainties.append(reward_uncertainty)
             return np.asarray(reward_uncertainties)
         # If the state is just one state in indexes form [row, col]

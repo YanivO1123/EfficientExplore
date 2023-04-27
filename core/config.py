@@ -85,7 +85,7 @@ class BaseConfig(object):
                  training_ratio: float = 1,
                  use_max_value_targets: bool = False,
                  use_max_policy_targets: bool = False,
-                 sampling_times: int = 0,
+                 sampling_times: int = 30,
                  ube_td_steps: int = 5,
                  ube_loss_coeff: float = 2,
                  ube_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
@@ -253,7 +253,8 @@ class BaseConfig(object):
         ube_support: DiscreteSupport
             support of ube to represent the ube scalars. Should be between 0 and max value
         count_based_ube: bool
-            Whether to use visitation counts as target for UBE. Defaults to false.
+            Whether to use visitation counts propagation as target for UBE, or MCTS planning tree with UBE.
+            Defaults to false.
         num_simulations_ube: int
             The number of simulations to use to compute ube targets in reanalyze when root_value is used.
         reset_ube_interval: int
@@ -403,7 +404,7 @@ class BaseConfig(object):
         self.reset_all_weights = False
         self.ube_support = ube_support
 
-        # Deep sea for debugging
+        # Deep sea specific hyper parameters
         self.deepsea_randomize_actions = True
         self.learned_model = True
         self.env_size = -1  # reset in set_game
@@ -524,7 +525,7 @@ class BaseConfig(object):
         self.use_root_value = args.use_root_value
 
         # Setup cluster specific config
-        if args.cluster:
+        if 'none' not in args.cluster:
             self.ensemble_size = 5
             if args.case == 'deep_sea':
                 self.ensemble_size = 10
@@ -652,8 +653,11 @@ class BaseConfig(object):
 
         # Setup path
         self.exp_path = os.path.join(args.result_dir, args.case, args.info, args.env, seed_tag, localtime)
-        if args.cluster:
+        if 'delft_blue' in args.cluster:
             cluster_results_path = os.path.join("/scratch/yanivoren/efficient_explore_results/", 'results')
+            self.exp_path = os.path.join(cluster_results_path, args.case, args.info, args.env, seed_tag, localtime)
+        elif 'hpc' in args.cluster:
+            cluster_results_path = os.path.join("/tudelft.net/staff-umbrella/yaniv/effzero_results", 'results')
             self.exp_path = os.path.join(cluster_results_path, args.case, args.info, args.env, seed_tag, localtime)
 
         self.model_path = os.path.join(self.exp_path, 'model.p')

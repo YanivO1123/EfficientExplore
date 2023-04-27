@@ -489,6 +489,10 @@ class BatchWorker_GPU(object):
                                                        fake=self.config.plan_with_fake_visit_counter)
 
     def get_ube_bootstrap(self, ube_obs_lst, batch_size, device):
+        """
+            Computes the UBE bootstrap based on max_action (current_state-action unc. + gamma ^ 2 * next_state_UBE).
+            If count_based_ube (i.e. plan_w_visitation_counts) current_state-action unc. comes from counts.
+        """
         m_batch = self.config.mini_infer_size
         slices = np.ceil(batch_size / m_batch).astype(np.int_)
         ube_lst = []
@@ -516,13 +520,35 @@ class BatchWorker_GPU(object):
                                                                                      (hidden_states_c_reward,
                                                                                       hidden_states_h_reward),
                                                                                      actions)
-                        # Sum the reward + gamma ** 2 value uncertainty for each action
-                        local_ube = recurrent_output_per_action.value_prefix_variance + \
-                                    recurrent_output_per_action.value_variance * self.config.discount ** 2
+                        if self.config.count_based_ube and self.config.use_visitation_counter:
+                            np_actions = actions.cpu().numpy()
+                            np_m_obs = m_obs.cpu().numpy()
+                            rewards_uncertainties_per_action = self.visitation_counter.get_reward_uncertainty(
+                                np_m_obs,
+                                np_actions).squeeze()
+                            assert np.shape(rewards_uncertainties_per_action) == \
+                                   np.shape(recurrent_output_per_action.value_variance), \
+                                f"np.shape(rewards_uncertainties_per_action) = " \
+                                f"{np.shape(rewards_uncertainties_per_action)}, " \
+                                f"np.shape(recurrent_output_per_action.value_variance) = " \
+                                f"{np.shape(recurrent_output_per_action.value_variance)}"
+
+                            # Sum the reward + gamma ** 2 value uncertainty for each action
+                            local_ube = rewards_uncertainties_per_action + \
+                                        recurrent_output_per_action.value_variance * self.config.discount ** 2
+                        else:
+                            # Sum the reward + gamma ** 2 value uncertainty for each action
+                            local_ube = recurrent_output_per_action.value_prefix_variance + \
+                                        recurrent_output_per_action.value_variance * self.config.discount ** 2
+
                         across_actions_ubes.append(local_ube)
 
                     # Stack all the local UBEs across the action dimension and compute the max across actions
-                    slice_ubes = np.amax(np.stack(across_actions_ubes, axis=0), axis=0)
+                    slice_ubes = np.amax(np.stack(across_actions_ubes, axis=0), axis=0).astype(float)
+
+                    assert len(slice_ubes) == len(m_obs), f"len(slice_ubes) = {len(slice_ubes)}, len(m_obs) = " \
+                                                          f"{len(m_obs)} and expected to be the same"
+
             else:
                 # Compute initial inference
                 _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(m_obs)
@@ -536,21 +562,43 @@ class BatchWorker_GPU(object):
                 for action in range(self.config.action_space_size):
                     actions = torch.ones(size=(state.shape[0], 1)).to(device).long() * action
                     recurrent_output_per_action = self.model.recurrent_inference(state,
-                                                              (hidden_states_c_reward, hidden_states_h_reward),
-                                                              actions)
-                    # Sum the reward + gamma ** 2 value uncertainty for each action
-                    local_ube = recurrent_output_per_action.value_prefix_variance + \
-                                recurrent_output_per_action.value_variance * self.config.discount ** 2
+                                                                                 (hidden_states_c_reward,
+                                                                                  hidden_states_h_reward),
+                                                                                 actions)
+                    if self.config.count_based_ube and self.config.use_visitation_counter:
+                        np_actions = actions.cpu().numpy()
+                        np_m_obs = m_obs.cpu().numpy()
+                        rewards_uncertainties_per_action = self.visitation_counter.get_reward_uncertainty(
+                            np_m_obs,
+                            np_actions).squeeze()
+                        assert np.shape(rewards_uncertainties_per_action) == \
+                               np.shape(recurrent_output_per_action.value_variance), \
+                            f"np.shape(rewards_uncertainties_per_action) = " \
+                            f"{np.shape(rewards_uncertainties_per_action)}, " \
+                            f"np.shape(recurrent_output_per_action.value_variance) = " \
+                            f"{np.shape(recurrent_output_per_action.value_variance)}"
+
+                        # Sum the reward + gamma ** 2 value uncertainty for each action
+                        local_ube = rewards_uncertainties_per_action + \
+                                    recurrent_output_per_action.value_variance * self.config.discount ** 2
+                    else:
+                        # Sum the reward + gamma ** 2 value uncertainty for each action
+                        local_ube = recurrent_output_per_action.value_prefix_variance + \
+                                    recurrent_output_per_action.value_variance * self.config.discount ** 2
+
                     across_actions_ubes.append(local_ube)
 
                 # Stack all the local UBEs across the action dimension and compute the max across actions
-                slice_ubes = np.amax(np.stack(across_actions_ubes, axis=0), axis=0)
+                slice_ubes = np.amax(np.stack(across_actions_ubes, axis=0), axis=0).astype(float)
+
+                assert len(slice_ubes) == len(m_obs), f"len(slice_ubes) = {len(slice_ubes)}, len(m_obs) = " \
+                                                      f"{len(m_obs)} and expected to be the same"
 
             # append the results
             ube_lst.append(slice_ubes)
 
         # The length of ube_lst should be the number of slices in the (batch size * trajectory length + 1)
-        ube_lst = np.asarray(ube_lst).reshape(-1)
+        ube_lst = np.asarray(ube_lst).astype(float).reshape(-1)
 
         assert len(ube_obs_lst) == len(ube_lst), f"Expecting the number of UBE observations to match the number of " \
                                                  f"UBE bootstraps, and got: len(ube_obs_lst) = {len(ube_obs_lst)} " \
@@ -587,21 +635,18 @@ class BatchWorker_GPU(object):
             ube_obs_lst = prepare_observation_lst(ube_obs_lst)
             rewards_uncertainty_obs_lst = prepare_observation_lst(rewards_uncertainty_obs_lst)
 
-            if self.config.count_based_ube and self.config.use_visitation_counter:
+            if self.config.count_based_ube and self.config.use_visitation_counter and self.config.use_root_value \
+                    and self.config.mu_explore:
                 # If counter IS used, we take the local uncertainties instead.
                 # First, we reshape observations to not include stacked-observations
                 rewards_uncertainty_lst = self.visitation_counter.get_reward_uncertainty(rewards_uncertainty_obs_lst,
-                                                                                         actions)
-                # Uncomment to use as target the propagated count value as target instead of actual ube bootstrap
-                # ube_lst = self.visitation_counter.get_propagated_value_uncertainty(ube_obs_lst,
-                #                                                                    propagation_horizon=self.config.env_size,
-                #                                                                    sampling_times=0,
-                #                                                                    use_state_visits=self.config.plan_with_state_visits)
+                                                                                         actions).tolist()
+
                 # split a full batch into slices of mini_infer_size: to save the GPU memory for more GPU actors
                 m_batch = self.config.mini_infer_size
                 slices = np.ceil(batch_size / m_batch).astype(np.int_)
                 network_output_ube = []
-                # First for UBE-bootstrap
+                # First for starting states for MCTS
                 for i in range(slices):
                     beg_index = m_batch * i
                     end_index = m_batch * (i + 1)
@@ -616,8 +661,55 @@ class BatchWorker_GPU(object):
                         m_output = self.model.initial_inference(m_obs)
                     network_output_ube.append(m_output)
 
-                ube_lst = concat_output_value_variance(network_output_ube)
+                # use the root values from MCTS. We propagate uncertainty instead of value and reward using a
+                # discount ** 2
+                value_variance_pool, value_prefix_variance_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_uncertainty_output(
+                    network_output_ube)
+                value_prefix_variance_pool = value_prefix_variance_pool.squeeze().tolist()
+                policy_logits_pool = policy_logits_pool.tolist()
+                # To reduce cost, compute ube_targets w. MCTS trees w. budget num_simulations_ube < num_simulations
+                roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations_ube)
+                noises = [
+                    np.random.dirichlet([self.config.root_dirichlet_alpha] * self.config.action_space_size).astype(
+                        np.float32).tolist() for _ in range(batch_size)]
+                # TODO: Do I really want to create NOISY roots as targets?
+                roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_variance_pool,
+                              policy_logits_pool)
+                initial_observations_for_counter = self.visitation_counter.from_one_hot_state_to_indexes(
+                    np.array(ube_obs_lst, dtype=np.uint8)[:, -1, :, :])
+                MCTS(self.config).search_w_visitation_counter(roots, self.model, hidden_state_roots,
+                                                              reward_hidden_roots,
+                                                              visitation_counter=self.visitation_counter,
+                                                              initial_observation_roots=initial_observations_for_counter,
+                                                              use_state_visits=self.config.plan_with_state_visits,
+                                                              sampling_times=self.config.sampling_times,
+                                                              propagating_uncertainty=True)
+                # We have propagated only uncertainty through this tree, so the uncertainty information is in the
+                # node values.
+                children_of_root_value_uncertainties = np.asarray(
+                    roots.get_roots_children_values(self.config.discount))
+                max_child_uncertainty = children_of_root_value_uncertainties.max(axis=-1)
+                ube_lst = np.array(max_child_uncertainty)
+
                 ube_lst = ube_lst.reshape(-1) * (  # UBE targets are discounted ** 2
+                        np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
+                ube_lst = ube_lst * np.array(ube_mask)
+                ube_lst = ube_lst.tolist()
+            elif self.config.count_based_ube and self.config.use_visitation_counter:
+                # If counter IS used, we take the local uncertainties instead.
+                # First, we reshape observations to not include stacked-observations
+                rewards_uncertainty_lst = self.visitation_counter.get_reward_uncertainty(rewards_uncertainty_obs_lst,
+                                                                                         actions).tolist()
+                # Uncomment to use as target the propagated count value as target instead of actual ube bootstrap
+                # ube_lst = self.visitation_counter.get_propagated_value_uncertainty(ube_obs_lst,
+                #                                                                    propagation_horizon=self.config.env_size,
+                #                                                                    sampling_times=0,
+                #                                                                    use_state_visits=self.config.plan_with_state_visits)
+
+                # Get the UBE bootstrap from max (u_r + gamma ** 2 u_v_next)
+                ube_lst = self.get_ube_bootstrap(ube_obs_lst, batch_size, device)
+
+                ube_lst = ube_lst * (  # UBE targets are discounted ** 2
                         np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
                 ube_lst = ube_lst * np.array(ube_mask)
                 ube_lst = ube_lst.tolist()

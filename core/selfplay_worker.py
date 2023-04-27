@@ -472,10 +472,11 @@ class DataWorker(object):
                                         previous_visitation_counts = copy.deepcopy(self.visitation_counter.s_counts)
                                         if self.config.mu_explore:
                                             if self.config.learned_model and not self.config.use_encoder and \
-                                                    'identity' in self.config.representation_type \
-                                                    or 'concatted' in self.config.representation_type:
+                                                    ('identity' in self.config.representation_type
+                                                    or 'concatted' in self.config.representation_type) and \
+                                                    self.config.do_consistency:
                                                 self.debug_state_prediction(model, total_transitions)
-                                            if 'deep_sea' in self.config.env_name and True:
+                                            if 'deep_sea' in self.config.env_name and not self.config.plan_with_visitation_counter:
                                                 self.debug_deep_sea(model)
                                 if self.config.mu_explore and total_transitions > 0:
                                     root_values_uncertainties = roots.get_values_uncertainty()
@@ -534,7 +535,7 @@ class DataWorker(object):
 
                             if 'deep_sea' in self.config.env_name and self.config.evaluate_uncertainty and \
                                     total_transitions in self.config.evaluate_uncertainty_at and \
-                                    self.config.use_deep_exploration:
+                                    self.config.use_deep_exploration and not self.config.plan_with_visitation_counter:
                                 try:
                                     self.evaluate_uncertainty(model=model, step_count=total_transitions)
                                 except:
@@ -618,7 +619,8 @@ class DataWorker(object):
         except:
             traceback.print_exc()
 
-    def get_ube_predictions(self, hidden_state_roots, reward_hidden_roots, env_nums, model):
+    def get_ube_predictions(self, hidden_state_roots, reward_hidden_roots, env_nums, model,
+                            observations_roots_for_counter=None):
         """
             Computes the ube predictions for each action at batched (abstracted) state hidden_state_roots.
             Used for deep_exploration WITHOUT MuExplore, with action selection that is based on Q values rather than
@@ -639,7 +641,8 @@ class DataWorker(object):
             self.device)
         for action in range(self.config.action_space_size):
             actions = [action for _ in range(env_nums)]
-            actions = torch.from_numpy(np.asarray(actions)).to(self.device).unsqueeze(1).long()
+            np_actions = np.asarray(actions)
+            actions = torch.from_numpy(np_actions).to(self.device).unsqueeze(1).long()
             # Predict value-variance prediction for all environments and specific action
             if self.config.amp_type == 'torch_amp':
                 with autocast():
@@ -652,13 +655,23 @@ class DataWorker(object):
                                                            (hidden_states_c_reward,
                                                             hidden_states_h_reward),
                                                            actions)
-            ube_predictions.append(network_output.value_variance)
+
+            if self.config.plan_with_visitation_counter:
+                assert observations_roots_for_counter is not None, f"observations_roots_for_counter must not be None" \
+                                                                   f"for counter based local uncertainty"
+                reward_uncertainties_from_counter = self.visitation_counter.get_reward_uncertainty(
+                    observations_roots_for_counter, np_actions).squeeze()
+                ube_predictions.append(reward_uncertainties_from_counter +
+                                       network_output.value_variance * self.config.discount ** 2)
+            else:
+                ube_predictions.append(
+                    network_output.value_prefix_variance + network_output.value_variance * self.config.discount ** 2)
 
         return np.asarray(ube_predictions)
 
     def debug_deep_sea(self, model):
         """
-           evaluates the results of MCTS over the diagonal of deep_sea/0
+           evaluates the results of MCTS over the diagonal of deep_sea
         """
         env_size = self.config.env_size
         # First, setup observation batches of shape (env_size, 1, env_size, env_size)
@@ -668,26 +681,6 @@ class DataWorker(object):
         for i in range(env_size):
             current_obs = np.zeros(shape=(env_size, env_size))
             current_obs[i, i] = 1
-            # if i == 0:
-            #     stack_obs = np.stack([zero_obs, zero_obs, zero_obs, current_obs], axis=0)
-            # elif i == 1:
-            #     one_obs = np.zeros(shape=(10, 10))
-            #     one_obs[0, 0] = 1
-            #     stack_obs = np.stack([zero_obs, zero_obs, one_obs, current_obs], axis=0)
-            # elif i == 2:
-            #     one_obs = np.zeros(shape=(10, 10))
-            #     one_obs[0, 0] = 1
-            #     two_obs = np.zeros(shape=(10, 10))
-            #     two_obs[1, 1] = 1
-            #     stack_obs = np.stack([zero_obs, one_obs, two_obs, current_obs], axis=0)
-            # else:
-            #     stack_obs = []
-            #     for j in range(3, 0, -1):
-            #         obs = np.zeros(shape=(10, 10))
-            #         obs[i - j][i - j] = 1
-            #         stack_obs.append(obs)
-            #     stack_obs.append(current_obs)
-            #     stack_obs = np.asarray(stack_obs)
             stack_obs = current_obs[np.newaxis, :]
             batched_obs.append(stack_obs)
         batched_obs = np.asarray(batched_obs)

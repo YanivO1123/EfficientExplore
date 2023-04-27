@@ -175,11 +175,16 @@ class BaseNet(nn.Module):
                 (B, support). Otherwise ignored.
         """
         with torch.no_grad():
+            # If no uncertainty mech. is used but we're in initial inference we can return zeros for val. var. unc.
+            if self.uncertainty_type is None or 'none' in self.uncertainty_type and previous_state is None:
+                return None, np.zeros(next_state.shape[0])
             # If no uncertainty mech. is used, we will return Nones
-            if self.uncertainty_type is None or 'none' in self.uncertainty_type:
+            elif self.uncertainty_type is None or 'none' in self.uncertainty_type:
                 return None, None
             else:
                 batch_size = next_state.shape[0]
+                value_variance = None
+                value_prefix_variance = None
 
                 # If the call came from initial_inference:
                 if action is None and previous_state is None and next_state is not None:
@@ -212,25 +217,33 @@ class BaseNet(nn.Module):
                 if 'ube' in self.uncertainty_type:
                     # We compute the value uncertainty as the sum of ube prediction (reliable on known states) and
                     # scaled value_uncertainty (more-reliable-than-UBE on unknown states).
-                    assert torch.is_tensor(value_variance) and len(value_variance.shape) == 1 and \
-                           value_variance.shape[0] == batch_size, f"type(value_variance) = {type(value_variance)} " \
-                                                                  f"and expected flat tensor of size batch_size = " \
-                                                                  f"{batch_size}"
-                    ube_prediction = self.compute_ube_uncertainty(next_state)
-                    if self.categorical_ube or len(ube_prediction.shape) > 1:
-                        ube_prediction = self.inverse_ube_transform(ube_prediction).squeeze()
-                        assert ube_prediction.shape == value_variance.shape, \
-                            f"ube_prediction.shape = {ube_prediction.shape}, " \
-                            f"value_variance.shape = {value_variance.shape}, and should be equal." \
-                            f"Expecting ({next_state.shape[0]})"
-                    value_variance = torch.maximum(self.value_uncertainty_propagation_scale * value_variance,
-                                                   ube_prediction.abs())
+                    if value_variance is not None:
+                        assert (torch.is_tensor(value_variance) and len(value_variance.shape) == 1 and
+                               value_variance.shape[0] == batch_size), f"type(value_variance) = {type(value_variance)} " \
+                                                                      f"and expected flat tensor of size batch_size = " \
+                                                                      f"{batch_size}"
+                        ube_prediction = self.compute_ube_uncertainty(next_state)
+                        if self.categorical_ube or len(ube_prediction.shape) > 1:
+                            ube_prediction = self.inverse_ube_transform(ube_prediction).squeeze()
+                            assert ube_prediction.shape == value_variance.shape, \
+                                f"ube_prediction.shape = {ube_prediction.shape}, " \
+                                f"value_variance.shape = {value_variance.shape}, and should be equal." \
+                                f"Expecting ({next_state.shape[0]})"
+
+                        value_variance = torch.maximum(self.value_uncertainty_propagation_scale * value_variance,
+                                                       ube_prediction.abs())
+                    else:
+                        ube_prediction = self.compute_ube_uncertainty(next_state).abs()
+                        if self.categorical_ube or len(ube_prediction.shape) > 1:
+                            ube_prediction = self.inverse_ube_transform(ube_prediction).squeeze()
+                        value_variance = ube_prediction
                     # Upper bound the propagated value and compute:
                     # certainty * ube_prediction + uncertainty * propagation scale
                     # value_variance = value_prefix_variance * self.value_uncertainty_propagation_scale + \
                     #                  (1 - value_prefix_variance) * ube_prediction.abs()
 
-                return value_variance.cpu().numpy(), value_prefix_variance.cpu().numpy()
+                return value_variance.cpu().numpy() if value_variance is not None else None, \
+                    value_prefix_variance.cpu().numpy() if value_prefix_variance is not None else None
 
     def initial_inference(self, obs) -> NetworkOutput:
         num = obs.size(0)

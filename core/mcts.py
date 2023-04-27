@@ -137,7 +137,7 @@ class MCTS(object):
                                               min_max_stats_lst, results, is_reset_lst)
 
     def search_w_visitation_counter(self, roots, model, hidden_state_roots, reward_hidden_roots, visitation_counter: CountUncertainty,
-               initial_observation_roots, use_state_visits=False, sampling_times=0):
+               initial_observation_roots, use_state_visits=False, sampling_times=0, propagating_uncertainty=False):
         """Do MCTS for the roots (a batch of root nodes in parallel). Parallel in model inference
         Parameters
         ----------
@@ -181,7 +181,7 @@ class MCTS(object):
             min_max_stats_lst.set_delta(self.config.value_delta_max)
             horizons = self.config.lstm_horizon_len
 
-            for index_simulation in range(self.config.num_simulations):
+            for index_simulation in range(self.config.num_simulations if not propagating_uncertainty else self.config.num_simulations_ube):
                 hidden_states = []
                 hidden_states_c_reward = []
                 hidden_states_h_reward = []
@@ -240,7 +240,7 @@ class MCTS(object):
                                                                                            use_state_visits=use_state_visits).tolist()
                     value_variance_pool = visitation_counter.get_surface_value_uncertainty(true_observations,
                                                                                               use_state_visits=use_state_visits)
-                    value_variance_pool = (value_variance_pool + network_output.value_variance.reshape(-1)).tolist()
+                    value_variance_pool = np.maximum(value_variance_pool, network_output.value_variance.reshape(-1)).tolist()
                 # Otherwise, if we use visitation counter use propagated value unc. estimate from the visitation count
                 elif self.config.plan_with_visitation_counter:
                     value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations,
@@ -275,7 +275,7 @@ class MCTS(object):
                 hidden_state_index_x += 1
 
                 #MuExplore: Backprop. w. uncertainty
-                if self.config.mu_explore:
+                if self.config.mu_explore and not propagating_uncertainty:
                     if self.config.disable_policy_in_exploration:
                         len_logits = len(policy_logits_pool[0])
                         policy_logits_pool = [policy_logits_pool[0]] + [[1.0] * len_logits for _ in range(len(policy_logits_pool) - 1)]
@@ -283,6 +283,16 @@ class MCTS(object):
                                               value_prefix_pool, value_pool, policy_logits_pool,
                                               min_max_stats_lst, results, is_reset_lst,
                                               value_prefix_variance_pool, value_variance_pool, num_exploratory)
+                elif self.config.mu_explore and propagating_uncertainty:
+                    assert value_prefix_variance_pool is not None and value_variance_pool is not None
+                    # When we call MCTS from reanalyze to make UBE targets, we are not interested in the value
+                    # uncertainty of the tree following the policy, but rather, the max
+                    len_logits = len(policy_logits_pool[0])
+                    policy_logits_pool = [[1.0] * len_logits for _ in range(len(policy_logits_pool))]
+                    # backpropagation along the search path to update the attributes
+                    tree.batch_back_propagate(hidden_state_index_x, discount ** 2,
+                                              value_prefix_variance_pool, value_variance_pool, policy_logits_pool,
+                                              min_max_stats_lst, results, is_reset_lst)
                 else:
                     # backpropagation along the search path to update the attributes
                     tree.batch_back_propagate(hidden_state_index_x, discount,

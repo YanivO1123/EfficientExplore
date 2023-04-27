@@ -236,7 +236,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             hidden_state_shape = (1, encoding_size, encoding_size)
             self.representation_network = no_batch_norm_mlp(representation_input_size, fc_representation_layers,
                                                             self.encoded_state_size,
-                                                            init_zero=False)
+                                                            init_zero=init_zero)
         elif 'concatted' in self.representation_type:
             self.representation_network = torch.nn.Identity()
             self.encoded_state_size = self.env_size * 2
@@ -399,7 +399,13 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         return next_encoded_state, reward_hidden, value_prefix
 
     def get_params_mean(self):
-        representation_mean = 0
+        if 'learned' in self.representation_type:
+            representation_mean = []
+            for name, param in self.representation_network.named_parameters():
+                representation_mean += np.abs(param.detach().cpu().numpy().reshape(-1)).tolist()
+            representation_mean = sum(representation_mean) / len(representation_mean)
+        else:
+            representation_mean = 0
         dynamic_mean = self.dynamics_network.get_dynamic_mean()
         reward_w_dist, reward_mean = self.dynamics_network.get_reward_mean()
 
