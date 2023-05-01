@@ -1021,7 +1021,7 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                         if 'ube' in config.uncertainty_architecture_type:
                             ube_predictions = model.compute_ube_uncertainty(hidden_states)
                             if config.categorical_ube:
-                                ube_predictions = config.inverse_ube_transform(ube_predictions).squeeze()
+                                ube_predictions = config.inverse_ube_transform(ube_predictions).squeeze().abs()
 
                         network_output_recur_left = model.recurrent_inference(hidden_states,
                                                                               (hidden_states_c_reward,
@@ -1051,7 +1051,7 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                     if 'ube' in config.uncertainty_architecture_type:
                         ube_predictions = model.compute_ube_uncertainty(hidden_states)
                         if config.categorical_ube:
-                            ube_predictions = config.inverse_ube_transform(ube_predictions).squeeze()
+                            ube_predictions = config.inverse_ube_transform(ube_predictions).squeeze().abs()
 
                     network_output_recur_left = model.recurrent_inference(hidden_states,
                                                                           (hidden_states_c_reward,

@@ -701,7 +701,7 @@ class BatchWorker_GPU(object):
                 # max_child_uncertainty = children_of_root_value_uncertainties.max(axis=-1)
                 # ube_lst = np.array(max_child_uncertainty)
 
-                ube_lst = ube_lst.reshape(-1) * (  # UBE targets are discounted ** 2
+                ube_lst = ube_lst * (  # UBE targets are discounted ** 2
                         np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
                 ube_lst = ube_lst * np.array(ube_mask)
                 ube_lst = ube_lst.tolist()
@@ -801,12 +801,13 @@ class BatchWorker_GPU(object):
                 MCTS(self.config).search(roots, self.model, hidden_state_roots, reward_hidden_roots, propagating_uncertainty=True)
                 # We have propagated only uncertainty through this tree, so the uncertainty information is in the
                 # node values.
-                children_of_root_value_uncertainties = np.asarray(roots.get_roots_children_values(self.config.discount))
-                max_child_uncertainty = children_of_root_value_uncertainties.max(axis=-1)
-                ube_lst = np.array(max_child_uncertainty)
+                ube_lst = roots.get_values()
+                # children_of_root_value_uncertainties = np.asarray(roots.get_roots_children_values(self.config.discount))
+                # max_child_uncertainty = children_of_root_value_uncertainties.max(axis=-1)
+                # ube_lst = np.array(max_child_uncertainty)
 
                 # get last state ube
-                ube_lst = ube_lst.reshape(-1) * (   # UBE targets are discounted ** 2
+                ube_lst = ube_lst * (   # UBE targets are discounted ** 2
                             np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
                 ube_lst = ube_lst * np.array(ube_mask)
                 ube_lst = ube_lst.tolist()
