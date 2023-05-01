@@ -443,6 +443,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             .float()
         )
         action_one_hot.scatter_(1, action.long(), 1.0)
+        if self.learned_model:
+            action_one_hot = action_one_hot * 10
 
         state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
 

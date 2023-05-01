@@ -521,11 +521,14 @@ class BatchWorker_GPU(object):
                                                                                       hidden_states_h_reward),
                                                                                      actions)
                         if self.config.count_based_ube and self.config.use_visitation_counter:
-                            np_actions = actions.cpu().numpy()
+                            np_actions = actions.cpu().numpy().squeeze()
                             np_m_obs = m_obs.cpu().numpy()
+                            print(f"Correct ube_bootstrap function is being called!", flush=True)
+                            assert np.shape(np_m_obs) == (len(np_m_obs), 1, self.config.env_size, self.config.env_size), \
+                                f"np.shape(np_m_obs) = {np.shape(np_m_obs)} and expecting: " \
+                                f"{(len(np_m_obs), 1, self.config.env_size, self.config.env_size)}"
                             rewards_uncertainties_per_action = self.visitation_counter.get_reward_uncertainty(
-                                np_m_obs,
-                                np_actions).squeeze()
+                                np_m_obs, np_actions, use_state_visits=self.config.plan_with_state_visits).squeeze()
                             assert np.shape(rewards_uncertainties_per_action) == \
                                    np.shape(recurrent_output_per_action.value_variance), \
                                 f"np.shape(rewards_uncertainties_per_action) = " \
@@ -548,7 +551,6 @@ class BatchWorker_GPU(object):
 
                     assert len(slice_ubes) == len(m_obs), f"len(slice_ubes) = {len(slice_ubes)}, len(m_obs) = " \
                                                           f"{len(m_obs)} and expected to be the same"
-
             else:
                 # Compute initial inference
                 _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(m_obs)
@@ -566,11 +568,13 @@ class BatchWorker_GPU(object):
                                                                                   hidden_states_h_reward),
                                                                                  actions)
                     if self.config.count_based_ube and self.config.use_visitation_counter:
-                        np_actions = actions.cpu().numpy()
+                        np_actions = actions.cpu().numpy().squeeze()
                         np_m_obs = m_obs.cpu().numpy()
+                        assert np.shape(np_m_obs) == (len(np_m_obs), 1, self.config.env_size, self.config.env_size), \
+                            f"np.shape(np_m_obs) = {np.shape(np_m_obs)} and expecting: " \
+                            f"{(len(np_m_obs), 1, self.config.env_size, self.config.env_size)}"
                         rewards_uncertainties_per_action = self.visitation_counter.get_reward_uncertainty(
-                            np_m_obs,
-                            np_actions).squeeze()
+                            np_m_obs, np_actions, use_state_visits=self.config.plan_with_state_visits).squeeze()
                         assert np.shape(rewards_uncertainties_per_action) == \
                                np.shape(recurrent_output_per_action.value_variance), \
                             f"np.shape(rewards_uncertainties_per_action) = " \
@@ -578,9 +582,14 @@ class BatchWorker_GPU(object):
                             f"np.shape(recurrent_output_per_action.value_variance) = " \
                             f"{np.shape(recurrent_output_per_action.value_variance)}"
 
+                        # Compute UBE as the max of ube or reward uncertainty propagated
+                        next_state_ube = np.maximum(self.model.value_uncertainty_propagation_scale *
+                                                    rewards_uncertainties_per_action,
+                                                    recurrent_output_per_action.value_variance)
+
                         # Sum the reward + gamma ** 2 value uncertainty for each action
-                        local_ube = rewards_uncertainties_per_action + \
-                                    recurrent_output_per_action.value_variance * self.config.discount ** 2
+                        local_ube = rewards_uncertainties_per_action + next_state_ube * self.config.discount ** 2
+
                     else:
                         # Sum the reward + gamma ** 2 value uncertainty for each action
                         local_ube = recurrent_output_per_action.value_prefix_variance + \
@@ -640,7 +649,7 @@ class BatchWorker_GPU(object):
                 # If counter IS used, we take the local uncertainties instead.
                 # First, we reshape observations to not include stacked-observations
                 rewards_uncertainty_lst = self.visitation_counter.get_reward_uncertainty(rewards_uncertainty_obs_lst,
-                                                                                         actions).tolist()
+                     actions, use_state_visits=self.config.plan_with_state_visits).tolist()
 
                 # split a full batch into slices of mini_infer_size: to save the GPU memory for more GPU actors
                 m_batch = self.config.mini_infer_size
@@ -686,10 +695,11 @@ class BatchWorker_GPU(object):
                                                               propagating_uncertainty=True)
                 # We have propagated only uncertainty through this tree, so the uncertainty information is in the
                 # node values.
-                children_of_root_value_uncertainties = np.asarray(
-                    roots.get_roots_children_values(self.config.discount))
-                max_child_uncertainty = children_of_root_value_uncertainties.max(axis=-1)
-                ube_lst = np.array(max_child_uncertainty)
+                ube_lst = roots.get_values()
+                # children_of_root_value_uncertainties = np.asarray(
+                #     roots.get_roots_children_values(self.config.discount))
+                # max_child_uncertainty = children_of_root_value_uncertainties.max(axis=-1)
+                # ube_lst = np.array(max_child_uncertainty)
 
                 ube_lst = ube_lst.reshape(-1) * (  # UBE targets are discounted ** 2
                         np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
@@ -699,17 +709,17 @@ class BatchWorker_GPU(object):
                 # If counter IS used, we take the local uncertainties instead.
                 # First, we reshape observations to not include stacked-observations
                 rewards_uncertainty_lst = self.visitation_counter.get_reward_uncertainty(rewards_uncertainty_obs_lst,
-                                                                                         actions).tolist()
+                        actions, use_state_visits=self.config.plan_with_state_visits).tolist()
+
                 # Uncomment to use as target the propagated count value as target instead of actual ube bootstrap
                 # ube_lst = self.visitation_counter.get_propagated_value_uncertainty(ube_obs_lst,
                 #                                                                    propagation_horizon=self.config.env_size,
-                #                                                                    sampling_times=0,
+                #                                                                    sampling_times=self.config.sampling_times,
                 #                                                                    use_state_visits=self.config.plan_with_state_visits)
-
                 # Get the UBE bootstrap from max (u_r + gamma ** 2 u_v_next)
                 ube_lst = self.get_ube_bootstrap(ube_obs_lst, batch_size, device)
 
-                ube_lst = ube_lst * (  # UBE targets are discounted ** 2
+                ube_lst = ube_lst.reshape(-1) * (  # UBE targets are discounted ** 2
                         np.array([self.config.discount for _ in range(batch_size)]) ** (td_steps_lst * 2))
                 ube_lst = ube_lst * np.array(ube_mask)
                 ube_lst = ube_lst.tolist()

@@ -85,7 +85,7 @@ class BaseConfig(object):
                  training_ratio: float = 1,
                  use_max_value_targets: bool = False,
                  use_max_policy_targets: bool = False,
-                 sampling_times: int = 30,
+                 sampling_times: int = 20,
                  ube_td_steps: int = 5,
                  ube_loss_coeff: float = 2,
                  ube_support: DiscreteSupport = DiscreteSupport(-300, 300, delta=1),
@@ -567,19 +567,30 @@ class BaseConfig(object):
             self.learned_model = not args.alpha_zero_planning  # AlphaZero is only implemented in deep_sea
             if not self.learned_model:
                 self.do_consistency = False  # Consistency loss only makes sense with a learned model.
+                self.representation_based_training = False
+
             self.deepsea_randomize_actions = not args.det_deepsea_actions
 
-            if args.representation_based_training:
+            if args.representation_based_training and self.learned_model:
                 self.representation_based_training = args.representation_based_training
+                self.do_consistency = True
 
             if args.representation_type is not None and self.learned_model:
                 self.representation_type = args.representation_type
             elif not self.learned_model:
                 self.representation_type = 'identity'
 
+            if self.learned_model:
+                self.rnd_scale = 0.001
+            else:
+                self.rnd_scale = 0.1
+
 
         # MuExplore:
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
+        assert self.do_consistency or 'rnd' not in self.uncertainty_architecture_type or not self.learned_model, \
+            f"RND can be used as epistemic unc. measure in planning only if the model is trained with a " \
+            f"consistency / reconstruction loss, or it's not learned."
         self.use_uncertainty_architecture = args.uncertainty_architecture  # Is there an active unc. arch. (rnd / ens.)
         assert (args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter)) or (
             not args.mu_explore)  # MuExplore is only applicable with some uncertainty mechanism

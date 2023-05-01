@@ -211,7 +211,8 @@ class BaseNet(nn.Module):
                 # We compute the local uncertainty in the value of next state as the sum of next_state_based_uncertainty
                 # (value_uncertainty) and previous-state-and-action uncertainty (value_prefix_uncertainty).
                 if value_prefix_variance is not None and value_variance is not None:
-                    value_variance = value_variance + value_prefix_variance
+                    # value_variance = value_variance + value_prefix_variance
+                    value_variance = value_prefix_variance
 
                 # Case UBE with either
                 if 'ube' in self.uncertainty_type:
@@ -233,9 +234,10 @@ class BaseNet(nn.Module):
                         value_variance = torch.maximum(self.value_uncertainty_propagation_scale * value_variance,
                                                        ube_prediction.abs())
                     else:
-                        ube_prediction = self.compute_ube_uncertainty(next_state).abs()
+                        ube_prediction = self.compute_ube_uncertainty(next_state)
                         if self.categorical_ube or len(ube_prediction.shape) > 1:
                             ube_prediction = self.inverse_ube_transform(ube_prediction).squeeze()
+                        ube_prediction = ube_prediction.abs()
                         value_variance = ube_prediction
                     # Upper bound the propagated value and compute:
                     # certainty * ube_prediction + uncertainty * propagation scale

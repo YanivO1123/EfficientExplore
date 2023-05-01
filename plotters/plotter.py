@@ -7,237 +7,218 @@ import pathlib
 import re
 
 
-"""
-    This file is used to load and plot the final results.
-"""
+def load_results():
+    """
+        Loads the results for a specific experiment (for example, mountaincar exploratory counter uncertainty)
+         with _ seeds (for example, 10) into one list, the way the smoother wants
+    """
+    root_path = "/home/yaniv/EfficientExplore/final_results/"
+    model_types = ["learned_model", "true_model", "muzero_model"]
+    agent_types = ["mctse", "random_baseline", "ube_baseline"]
+    counts_name = "s_counts.npy"
+    exploration_rate_names = ["states_visited_per_step.npy", "steps_for_states_visited.npy"]
+    return_names = ["mean_test_results.npy", "training_steps.npy"]
+
+    experiments = []
+
+    for model_type in model_types:
+        for agent_type in agent_types:
+            path = root_path + model_type + "/" + agent_type + "/"
+            dir_names = sorted([dir_name for dir_name in os.listdir(path)])
+            for seed_dir in dir_names:
+                # This assumes that all files are in this level of folders
+
+                pass
+
+    # Returns:
+    # [returns_for_seed]
+    return
 
 
-def cleanup(top_path="../final_results/"):
-    """
-        This function deletes all the necessary files from the final-results folder, so that they become
-        reasonably-sized and uploadeble to git
-    """
+    # Iterate over all seeds in the folder
+
+    # load the results for all files of the right names in the folder
+
+    # Start averaging and plotting
+
     # Make a list of the different seeds' folder names
-    for path_name in os.listdir(top_path):
-        path = top_path + path_name + "/"
-        dir_names = [sorted([path + top_dir_name + "/" + dir_name for dir_name in os.listdir(path + top_dir_name)]) for
-                     top_dir_name in os.listdir(path)]
+    dir_names = sorted([dir_name for dir_name in os.listdir(path)])
 
-        # Make a list of the separate files
-        to_remove_files = [
-            [
-                [
-                    dir_name + "/" + filename
-                    for filename in sorted(
-                    os.listdir(dir_name)
-                )
-                    if not filename.endswith(".npy") and "config" not in filename
-                ] for dir_name in top_dir_names
-            ]
-            for top_dir_names in dir_names
-        ]
+    # Make a list of the separate files
+    results_file_names = [
+        [
+            path + dir_name + "/" + filename
+            for filename in sorted(
+            os.listdir(path + dir_name)
+        )
+            if filename.endswith(".npy")
+        ] for dir_name in dir_names
+    ]
 
-        # Remove all not-my-results files, to save space
-        for top_dir in to_remove_files:
-            for innder_dir in top_dir:
-                for file in innder_dir:
-                    print(file)
-                    os.remove(file)
+    experiment_results = []
 
-        # # Rename files from played_steps.npy to played.npy because WSL is retarded
-        # if path_name == "mountaincarDoublePlanningAblations":
-        #     to_rename_files = [
-        #         [
-        #             [
-        #                 dir_name + "/" + filename
-        #                 for filename in sorted(
-        #                 os.listdir(dir_name)
-        #             )
-        #                 if filename.endswith("total_rewards.npy")
-        #             ] for dir_name in top_dir_names
-        #         ]
-        #         for top_dir_names in dir_names
-        #     ]
-        #
-        #     # Rename files
-        #     for top_dir in to_rename_files:
-        #         for innder_dir in top_dir:
-        #             for file_name in innder_dir:
-        #                 new_file_name = os.path.dirname(file_name) + "/rewards.npy"
-        #                 os.rename(file_name, new_file_name)
-        #                 print(new_file_name)
+    # For each seed
+    for seed in results_file_names:
+        # For each result-file
+        for result_file in seed:
+            if x_name[0] in result_file:
+                new_file_name = os.path.dirname(result_file) + "/played_steps.npy"
+                os.rename(result_file, new_file_name)
+                xs = np.load(new_file_name)
+            if x_name[1] in result_file or x_name[2] in result_file:
+                xs = np.load(result_file, allow_pickle=True)
+            elif y_name[0] in result_file or y_name[1] in result_file:
+                ys = np.load(result_file)
+
+        experiment_results.append([ys, xs])
+
+    return experiment_results
 
 
-def plot_general(index,
-                 subplot_titles,
-                 paths_to_experiments,
-                 sem=True,
-                 plot_seperately=True,  # Plot each experiment in its own figure, or all in the same subplot
-                 num_rows=None, # How many expriments (how many subplot rows)
-                 ):
-    if len(subplot_titles) < 1:
-        return index
-    elif len(subplot_titles) == 1:
-        ### Load first
-        results_first_plot = []
-        path_first_plot = paths_to_experiments[0]
-        path_list_first_plot = [
-            path_first_plot +
-            dir_name + "/"
-            for dir_name in os.listdir(path_first_plot)
-        ]
-        experiment_names_first_plot = []
-        for path in sorted(path_list_first_plot):
-            results_first_plot.append(c_p.load_results(path))
-            path = pathlib.PurePath(path)
-            experiment_names_first_plot.append(path.name)
-
-        # load
-        results = []
-        path = paths_to_experiments[0]
-        individual_paths = [
-            path +
-            dir_name + "/"
-            for dir_name in os.listdir(path)
-        ]
-        experiment_names = []
-        for path in sorted(individual_paths):
-            results.append(c_p.load_results(path))
-            path = pathlib.PurePath(path)
-            experiment_names.append(path.name)
-        # for path in sorted(individual_paths):
-        # results.append(c_p.load_results(path))
-        # path = pathlib.PurePath(path)
-        # experiment_names.append(path.name)
-
-        plt.figure(index)
-        plt.title(subplot_titles[0], fontsize=8)
-        c_p.plot_log(results, experiment_names, sem=sem)
-        plt.legend(fontsize=6)
-
-        index += 1
-
-        return index
-        # plot
-    elif len(subplot_titles) == 2:
-        ### Load first
-        results_first_plot = []
-        path_first_plot = paths_to_experiments[0]
-        path_list_first_plot = [
-            path_first_plot +
-            dir_name + "/"
-            for dir_name in os.listdir(path_first_plot)
-        ]
-        experiment_names_first_plot = []
-        for path in sorted(path_list_first_plot):
-            results_first_plot.append(c_p.load_results(path))
-            path = pathlib.PurePath(path)
-            experiment_names_first_plot.append(path.name)
-
-        ### Load second
-        results_second_plot = []
-        path_second_plot = paths_to_experiments[1]
-        path_list_second_plot = [
-            path_second_plot +
-            dir_name + "/"
-            for dir_name in os.listdir(path_second_plot)
-        ]
-        experiment_names_second_plot = []
-        for path in sorted(path_list_second_plot):
-            results_second_plot.append(c_p.load_results(path))
-            path = pathlib.PurePath(path)
-            experiment_names_second_plot.append(path.name)
-
-        if plot_seperately:
-            # Plot
-            plt.figure(index)
-            plt.subplot(121)
-            plt.title(subplot_titles[0], fontsize=8)
-            c_p.plot_log(results_first_plot, experiment_names_first_plot, sem=sem)
-            plt.legend(fontsize=6)
-            plt.subplot(122)
-            plt.title(subplot_titles[1], fontsize=8)
-            c_p.plot_log(results_second_plot, experiment_names_second_plot, sem=sem)
-            plt.legend(fontsize=6)
-            index += 1
-        else:
-            plt.figure(0)
-            subplot_shape = num_rows * 100 + 2 * 10 + index + 1
-            print(subplot_shape)
-            plt.subplot(subplot_shape)
-            plt.title(subplot_titles[0], fontsize=8)
-            c_p.plot_log(results_first_plot, experiment_names_first_plot, sem=sem)
-            plt.legend(fontsize=6)
-            plt.subplot(subplot_shape + 1)
-            plt.title(subplot_titles[1], fontsize=8)
-            c_p.plot_log(results_second_plot, experiment_names_second_plot, sem=sem)
-            plt.legend(fontsize=6)
-            index += 2
-
-        return index
-    else:
-        print("Only implemented plotting of up to 2 plots")
-
-
-def load_counts(path):
+def load_counts_and_exploration_rate():
     pass
 
-# Test heat_map plotter
-# Generate some random data
 
-path = "/home/yaniv/EfficientExplore/results/deep_sea/muexplore/deep_sea/7/mu_explore_seed=5339032/Tue Apr 18 19:11:45 2023/s_counts.npy"
-# s_counts = np.random.randint(1000, size=(50, 50))
-s_counts = np.load(path)
-scores = np.random.rand(50, 50)
-bucket_size = 2
-bucket_cap = 5
-# Plot the heat map
-c_p.plot_heat_maps(s_counts, sa_counts=None, count_cap=20)
-# c_p.plot_scores_vs_counts(s_counts, scores, bucket_size, bucket_cap)
+
+
+"""
+    This script is used to load and plot the final results.
+"""
+
+# Keeps track of recent local experiment
+path = "/home/yaniv/EfficientExplore/results/deep_sea/MuMCTSE/deep_sea/10/mu_explore_seed=8244051/Mon May  1 10:11:58 2023/s_counts.npy"  # _at_step_5000 _at_step_10000
+counts = np.load(path)
+c_p.plot_heat_maps(counts, sa_counts=None, count_cap=20)
+# plt.show()
+
+# Load all alpha_explore seeds that worked
+main_path = "/home/yaniv/EfficientExplore/results_from_cluster/results/deep_sea/alphaexplore/deep_sea/15/"
+indiv_paths = ["mu_explore_seed=1391267/Sun Apr 30 00:38:32 2023", "mu_explore_seed=7015372/Sun Apr 30 01:25:28 2023", "mu_explore_seed=4597644/Sun Apr 30 04:07:13 2023"]
+
+counts_list_explore = []
+visited_states_list_explore = []
+steps_for_states_visited_list_explore = []  #
+average_test_return_list_explore = []
+training_steps_list_explore = []
+labels_explore = []
+
+# load results for each seed
+for path in indiv_paths:
+    local_path = main_path + path
+
+    counts_list_explore.append(np.load(local_path + "/s_counts_at_step_20000.npy"))
+
+    visited_states_list_explore.append(np.load(local_path + "/states_visited_per_step.npy"))
+    steps_for_states_visited_list_explore.append(np.load(local_path + "/steps_for_states_visited.npy"))
+
+    average_test_return_list_explore.append(np.load(local_path + "/mean_test_results.npy"))
+    training_steps_list_explore.append(np.load(local_path + "/training_steps.npy"))
+
+results_explore = [[[returns, steps] for returns, steps in zip(average_test_return_list_explore, training_steps_list_explore)]]    # Of form [[ys, xs], ...]
+experiment_names_explore = ["AlphaExplore"]
+
+# Load all alpha_ube seeds that worked
+main_path = "/home/yaniv/EfficientExplore/results_from_cluster/results/deep_sea/alpha_mcts_ube/deep_sea/15/"
+indiv_paths = ["deep_exploration_no_muexp_seed=553140/Fri Apr 28 13:56:00 2023",
+               "deep_exploration_no_muexp_seed=4874493/Fri Apr 28 13:56:01 2023",
+               "deep_exploration_no_muexp_seed=9970288/Fri Apr 28 21:08:51 2023",
+               "deep_exploration_no_muexp_seed=6118871/Sun Apr 30 04:07:14 2023",
+               "deep_exploration_no_muexp_seed=556009/Sun Apr 30 04:39:36 2023",
+               "deep_exploration_no_muexp_seed=3288310/Sun Apr 30 05:46:38 2023"]
+
+counts_list_ube = []
+visited_states_list_ube = []
+steps_for_states_visited_list_ube = []  #
+average_test_return_list_ube = []
+training_steps_list_ube = []
+labels_ube = []
+
+# load results for each seed
+for path in indiv_paths:
+    local_path = main_path + path
+
+    counts_list_ube.append(np.load(local_path + "/s_counts_at_step_20000.npy"))
+
+    visited_states_list_ube.append(np.load(local_path + "/states_visited_per_step.npy"))
+    steps_for_states_visited_list_ube.append(np.load(local_path + "/steps_for_states_visited.npy"))
+
+    average_test_return_list_ube.append(np.load(local_path + "/mean_test_results.npy"))
+    training_steps_list_ube.append(np.load(local_path + "/training_steps.npy"))
+
+results_ube = [[[returns, steps] for returns, steps in zip(average_test_return_list_ube, training_steps_list_ube)]]    # Of form [[ys, xs], ...]
+experiment_names_ube = ["AlphaUBE"]
+
+# Plot against each other
+sem = True
+plt.gcf()
+plt.figure()
+plt.title("Average return", fontsize=8)
+c_p.plot_log(results_explore, experiment_names_explore, sem=sem)
+c_p.plot_log(results_ube, experiment_names_ube, sem=sem)
+plt.legend(fontsize=6)
+
 plt.show()
 exit()
 
-# control font sizes:
-matplotlib.rc('xtick', labelsize=6)
-matplotlib.rc('ytick', labelsize=6)
+#################################
+# Load all 3 seeds:
+main_path = "/home/yaniv/EfficientExplore/results_from_cluster/results/deep_sea/muexplore/deep_sea/15/"
+indiv_paths = ["mu_explore_seed=4333300/Thu Apr 27 17:24:43 2023", "mu_explore_seed=2455675/Thu Apr 27 17:25:29 2023", "mu_explore_seed=6274682/Thu Apr 27 17:27:24 2023"]
 
-# # cleanup() will remove all event and replay-buffer files from the final results folder. Actual results are saved.
-# cleanup()
+counts_list = []
+visited_states_list = []
+steps_for_states_visited_list = []  #
+average_test_return_list = []
+training_steps_list = []
+labels = []
 
-# The index makes sure the figures are indexed correctly
-index = 0
-all_experiment_paths = [
-    # ["../final_results/slide_core/", "../final_results/mountaincar_terminal/"],    # This is for mc terms + regular slide
-    # ["../final_results/slide_core/", "../final_results/mountaincar_core/"],
-    # ["./slideValueTargetAblations/", "../final_results/mountaincarValueTargetAblations/"],
-    # ["../final_results/slidePolicyTargetAblations/", "../final_results/mountaincarPolicyTargetAblations/"],
-    # ["./slideDoublePlanningAblations/", "./mountaincarDoublePlanningAblations/"],
-    # ["../final_results/slideAlternatingLearningAblations/", "./mountaincarAlternatingLearningAblations/"],
-    # ["../final_results/slide_terminal/", "../final_results/mountaincar_terminal/"],
-    # ["./mountaincarJointCounterCoeffExperiments/", "./mountaincarJointEnsembleCoeffExperiments/"],
-    # ["../final_results/mountaincarValueTargetAblations/", "../final_results/mountaincarPolicyTargetAblations/"], # for ablations for the paper
-    # ["./mountaincarAlternatingLearningAblations/", "./mountaincarDoublePlanningAblations/"],
-    ["./slide_3_actions/"],
-]
-all_experiment_titles = [
-    # ["Results against the Slide environment", "Results against the Mountain Car environment"],
-    # ["Results against the Slide environment", "Results against the Mountain Car environment"],
-    # ["Slide, value targets ablation study", "Mountain Car, value targets ablation study"],
-    # ["Slide, policy targets ablation study", "Mountain Car, policy targets ablation study"],
-    # ["Slide, double planning ablation study", "Mountain Car, double planning ablation study"],
-    # ["Slide, alternating episodes ablation study", "Mountain Car, alternating episodes ablation study"],
-    # ["Slide, negative rewards scheme", "Mountain Car, original reward scheme"],
-    # ["Robust-exploratory, visitation counting, growing coeff.", "Robust-exploratory, ensemble, growing coeff."],
-    # ["Mountain Car, value targets ablation study", "Mountain Car, policy targets ablation study"], # for ablations for the paper
-    # ["Mountain Car, alternating episodes ablation study", "Mountain Car, double planning ablation study"], # for ablations for the paper
-    ["Slide, three actions, length 60, starting at position 10"],
-]
+# load results for each seed
+for path in indiv_paths:
+    local_path = main_path + path
 
-# This will print everything in the above lists, to plot through one functionality.
-# If we wish to plot one specific plot, just comment the other paths and titles in the above lists
-plt.figure(index)
-for i in range(len(all_experiment_paths)):
-    index = plot_general(index, all_experiment_titles[i], all_experiment_paths[i], plot_seperately=True, num_rows=len(all_experiment_titles))
+    counts_list.append(np.load(local_path + "/s_counts_at_step_20000.npy"))
 
-### Print plots
+    visited_states_list.append(np.load(local_path + "/states_visited_per_step.npy"))
+    steps_for_states_visited_list.append(np.load(local_path + "/steps_for_states_visited.npy"))
+
+    average_test_return_list.append(np.load(local_path + "/mean_test_results.npy"))
+    training_steps_list.append(np.load(local_path + "/training_steps.npy"))
+
+# Plot the exploration rate
+plt.figure(0)
+for i in range(len(indiv_paths)):
+    steps = steps_for_states_visited_list[i]
+    visited_states = visited_states_list[i]
+    plt.plot(steps, visited_states, label=f"agent {i}")
+plt.legend()
+plt.title(f"Unique states visited per time step")
+
+min_len = np.min([len(visited_states) for visited_states in visited_states_list])
+
+average_exploration_rate = (visited_states_list[0][:min_len] + visited_states_list[1][:min_len] + visited_states_list[2][:min_len]) / 3
+
+plt.figure(1)
+steps = steps_for_states_visited_list[0]
+plt.plot(steps, average_exploration_rate)
+plt.title(f"Unique states visited per time step, average")
+
+# Plot the average heat_map
+counts_average = (counts_list[0] + counts_list[1] + counts_list[2]) / 3
+c_p.plot_heat_maps(counts_average, sa_counts=None, count_cap=20)
+
+# Plot the test return
+results = [[[returns, steps] for returns, steps in zip(average_test_return_list, training_steps_list)]]    # Of form [[ys, xs], ...]
+experiment_names = ["mu_explore_counts"]
+sem = True
+
+plt.gcf()
+plt.figure()
+plt.title("Average return", fontsize=8)
+c_p.plot_log(results, experiment_names, sem=sem)
+plt.legend(fontsize=6)
+
+
 plt.show()
+exit()
+
+
