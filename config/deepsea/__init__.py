@@ -56,11 +56,11 @@ class DeepSeaConfig(BaseConfig):
             frame_skip=1,
             stacked_observations=1,     # 4 2
             # coefficient
-            reward_loss_coeff=1.0,
-            value_loss_coeff=0.5,  # 0.25 original # 1 0.5
-            policy_loss_coeff=0.5,
-            consistency_coeff=2.0,
-            ube_loss_coeff=0.25,
+            reward_loss_coeff=0.1,
+            value_loss_coeff=0.05,  # 0.25 original # 1 0.5
+            policy_loss_coeff=0.05,
+            consistency_coeff=5.0,
+            ube_loss_coeff=0.025,
             # reward sum
             lstm_hidden_size=64, #512
             use_value_prefix=False,
@@ -86,9 +86,9 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            ube_td_steps=5,
+            ube_td_steps=3,
             reset_ube_interval=6000,
-            rnd_scale=0.001,
+            rnd_scale=0.1,
             ube_support=DiscreteSupport(-10, 10, delta=1),
         )
         self.start_transitions = max(1, self.start_transitions)
@@ -121,7 +121,7 @@ class DeepSeaConfig(BaseConfig):
         self.reset_all_weights = True
 
         self.evaluate_uncertainty = True
-        self.evaluate_uncertainty_at = [100, 1000, 5000, 10000, 20000]
+        self.evaluate_uncertainty_at = [100, 1000, 5000, 10000, 15000, 20000]
 
         self.representation_based_training = False   # For deep sea, changes muzero training to be based on
 
@@ -135,6 +135,8 @@ class DeepSeaConfig(BaseConfig):
         # one-step consistency loss in deep_sea
 
         # representations of true states, not hidden states
+
+        self.amplify_rnd_weights = 2.0
 
         # To reduce the effect of the policy on the selection, we reduce pb_c_init to 0.5.
         # This should give the policy about half the weight
@@ -220,10 +222,10 @@ class DeepSeaConfig(BaseConfig):
                     model.reward_rnd_target_network.apply(fn=init_kaiming_trunc_haiku)
                 for p in model.value_rnd_target_network.parameters():
                     p.requires_grad = False
-                    p *= 3
+                    p *= self.amplify_rnd_weights
                 for p in model.reward_rnd_target_network.parameters():
                     p.requires_grad = False
-                    p *= 3
+                    p *= self.amplify_rnd_weights
             if 'ensemble' in self.uncertainty_architecture_type:
                 if not self.learned_model:
                     model.dynamics_network.fc.apply(fn=init_kaiming_trunc_haiku)

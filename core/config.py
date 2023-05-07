@@ -565,25 +565,24 @@ class BaseConfig(object):
                 self.plan_with_state_visits = args.plan_w_state_visits
             self.architecture_type = 'fully_connected'  # Only fully_connected is implemented for deep_sea
             self.learned_model = not args.alpha_zero_planning  # AlphaZero is only implemented in deep_sea
-            if not self.learned_model:
+            self.representation_based_training = args.representation_based_training
+            if args.representation_type is not None and self.learned_model:
+                self.representation_type = args.representation_type
+            elif not self.learned_model:
+                self.representation_type = 'identity'
+            if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type
+                                       or self.representation_based_training):
+                self.do_consistency = True
+            elif not self.learned_model:
                 self.do_consistency = False  # Consistency loss only makes sense with a learned model.
                 self.representation_based_training = False
 
             self.deepsea_randomize_actions = not args.det_deepsea_actions
 
-            if args.representation_based_training and self.learned_model:
-                self.representation_based_training = args.representation_based_training
-                self.do_consistency = True
-
-            if args.representation_type is not None and self.learned_model:
-                self.representation_type = args.representation_type
-            elif not self.learned_model:
-                self.representation_type = 'identity'
-
             if self.learned_model:
-                self.rnd_scale = 0.001
-            else:
                 self.rnd_scale = 0.1
+            else:
+                self.rnd_scale = 10.0
 
 
         # MuExplore:

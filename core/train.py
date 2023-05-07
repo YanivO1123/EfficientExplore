@@ -187,7 +187,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
     # value RND loss:
     if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
-        rnd_loss = get_rnd_loss(model, hidden_state, batch_size, config.device, learned_model=config.learned_model)
+        rnd_loss = get_rnd_loss(model, hidden_state, batch_size, config.device)
         previous_state = hidden_state
     else:
         rnd_loss = torch.zeros(batch_size, device=config.device)
@@ -292,7 +292,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     else:
                         current_state = obs_target_batch[:, beg_index:end_index, :, :]
                     rnd_loss += get_rnd_loss(model, current_state, batch_size, config.device,
-                                             previous_state, action, learned_model=config.learned_model) \
+                                             previous_state, action) \
                                 * mask_batch[:, step_i]
                     previous_state = current_state
 
@@ -426,7 +426,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 else:
                     current_state = obs_target_batch[:, beg_index:end_index, :, :]
                 rnd_loss += get_rnd_loss(model, current_state, batch_size, config.device,
-                                         previous_state, action, learned_model=config.learned_model) \
+                                         previous_state, action) \
                             * mask_batch[:, step_i]
                 previous_state = current_state
 
@@ -491,6 +491,8 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
     if 'rnd' in config.uncertainty_architecture_type:
         loss += rnd_loss
+        if step_count % 100 == 0:
+            print(f"At step {step_count}, rnd_loss = {rnd_loss.mean().item()}")
     if 'ube' in config.uncertainty_architecture_type:
         loss += ube_loss * config.ube_loss_coeff
 
@@ -601,7 +603,7 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
         ]
         if 'rnd' in config.uncertainty_architecture_type:
             parameters = parameters + [
-                {'params': model.rnd_parameters(), 'lr': config.lr_init}    # was 1e-2
+                {'params': model.rnd_parameters(), 'lr': config.lr_init}
             ]
         if 'ube' in config.uncertainty_architecture_type:
             parameters = parameters + [
@@ -609,7 +611,7 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             ]
         if config.learned_model:
             parameters = parameters + [
-                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': config.lr_init}  # Was 0.5 * 1e-3
+                {'params': model.dynamics_network.state_prediction_net.parameters(), 'lr': config.lr_init}
             ]
         optimizer = optim.Adam(parameters, lr=config.lr_init)
     else:
@@ -871,13 +873,18 @@ def debug_train_deep_sea(observations_batch, values_targets_batch, policy_target
               f"action: {action_batch[i, j - 1] if j > 0 else 1}")
 
 
-def get_rnd_loss(model, next_state, batch_size, device, previous_state=None, action=None, learned_model=False):
+def get_rnd_loss(model, next_state, batch_size, device, previous_state=None, action=None):
     """
         To compute the rnd error for value, we take the next-state prediction for previous-state and action.
         To compute the rnd error for reward, we take the previous-state and action.
         This is the reason both previous state and next state are passed to this function.
     """
     local_loss = torch.zeros(batch_size, device=device)
+
+    if model.learned_model and ('concatted' in model.representation_type or 'identity' in model.representation_type):
+        next_state = next_state * (1 / model.amplify_one_hot)
+        if previous_state is not None:
+            previous_state = previous_state * (1 / model.amplify_one_hot)
 
     # Compute value_rnd loss
     state_for_rnd = next_state.reshape(-1, model.input_size_value_rnd).detach().to(device)
@@ -897,8 +904,6 @@ def get_rnd_loss(model, next_state, batch_size, device, previous_state=None, act
             .float()
         )
         action_one_hot.scatter_(1, action.long(), 1.0)
-        if learned_model:
-            action_one_hot = action_one_hot * 10
         flattened_state = previous_state.reshape(-1, model.input_size_reward_rnd - model.action_space_size)
         state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach().to(device)
         local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),

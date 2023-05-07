@@ -200,6 +200,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         # The value_uncertainty_propagation_scale coeff is the sum of a geometric series with r = gamma ** 2 and
         # n = env_size. The idea is that for new states local variance prediction should be more reliable than ube
         self.value_uncertainty_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
+        self.amplify_one_hot = 10
 
         assert 'identity' in self.representation_type or 'encoder' in self.representation_type \
                or 'concatted' in self.representation_type or 'learned' in self.representation_type, \
@@ -344,7 +345,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                 encoded_state = encoded_state.reshape(encoded_state.shape[0], 1, self.encoding_size, self.encoding_size)
             elif self.learned_model:
                 # Rescale the states to make them easier to learn with the MSE-based consistency loss.
-                encoded_state = encoded_state * 10
+                encoded_state = encoded_state * self.amplify_one_hot
         elif 'concatted' in self.representation_type:
             device = observation.device
             N = self.env_size
@@ -364,7 +365,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             # Setup all empty-state tensors to a zeros tensor of the right shape
             encoded_state[mask] = zeros_one_hot
             # Multiply by a constant to make it easy for MSE
-            encoded_state = encoded_state * 10
+            encoded_state = encoded_state * self.amplify_one_hot
         else:
             batch_size = observation.shape[0]
             observation = observation.reshape(observation.shape[0], -1)
@@ -425,12 +426,16 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
     def compute_value_rnd_uncertainty(self, state):
         state = state.reshape(-1, self.input_size_value_rnd).detach()
+        if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type):
+            state = state * (1 / self.amplify_one_hot)
         return self.rnd_scale * torch.nn.functional.mse_loss(self.value_rnd_network(state),
                                                              self.value_rnd_target_network(state).detach(),
                                                              reduction='none').sum(dim=-1)
 
     def compute_reward_rnd_uncertainty(self, state, action):
         flattened_state = state.reshape(-1, self.input_size_reward_rnd - self.action_space_size)
+        if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type):
+            flattened_state = flattened_state * (1 / self.amplify_one_hot)
 
         action_one_hot = (
             torch.zeros(
@@ -444,7 +449,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         )
         action_one_hot.scatter_(1, action.long(), 1.0)
         if self.learned_model:
-            action_one_hot = action_one_hot * 10
+            action_one_hot = action_one_hot
 
         state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
 
