@@ -285,6 +285,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             prior_scale=self.prior_scale,
             use_encoder=self.use_encoder,
             representation_encoder=self.representation_encoder if not self.learned_model and self.use_encoder else None,
+            representation_type=representation_type
         )
 
         # projection
@@ -375,6 +376,10 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         return encoded_state
 
     def prediction(self, encoded_state):
+        # We detach value and policy losses for anchored, non-muzero style model learning
+        if 'learned' not in self.representation_type:
+            encoded_state = encoded_state.detach()
+
         # We reshape the encoded_state to the shape of input of the FC nets that follow
         encoded_state = encoded_state.reshape(encoded_state.shape[0], -1)
 
@@ -466,10 +471,12 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         state = state.reshape(state.shape[0], -1)
         if self.use_encoder and not self.learned_model:
             state = self.representation_encoder(state.detach()).detach()
-        # We squeeze the result to return tensor of shape [B] instead of [B, 1]
+        if 'learned' not in self.representation_type:
+            state = state.detach()
         ube_prediction = self.ube_network(state)
         # To guarantee that output value is positive, we treat it as a logit instead of as a direct scalar
         if not self.categorical_ube:
+            # We squeeze the result to return tensor of shape [B] instead of [B, 1]
             ube_prediction = torch.exp(ube_prediction.squeeze(-1))
         return ube_prediction
 
@@ -543,6 +550,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
                  prior_scale=10.0,
                  use_encoder=False,
                  representation_encoder=None,
+                 representation_type=None,
                  ):
         """
         Non-resnet, non-conv dynamics network, for deep_sea.
@@ -571,6 +579,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         self.state_prediction_net_prior = None
         self.use_encoder = use_encoder
         self.representation_encoder = representation_encoder
+        self.representation_type = representation_type
 
         # Init dynamics prediction, learned or given
         if learned_model:
@@ -665,6 +674,9 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             action_one_hot.scatter_(1, action.long(), 1.0)
             flattened_state = encoded_state.reshape(batch_size, -1)
             x = torch.cat((flattened_state, action_one_hot), dim=-1)
+
+        if 'learned' not in self.representation_type:
+            x = x.detach()
 
         # Reward prediction is done based on EfficientExplore architecture, only if we don't use an ensemble.
         if self.ensemble:

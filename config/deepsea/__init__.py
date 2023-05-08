@@ -14,7 +14,7 @@ from core.utils import init_kaiming_trunc_haiku
 class DeepSeaConfig(BaseConfig):
     def __init__(self):
         super(DeepSeaConfig, self).__init__(
-            training_steps=80 * 1000, #100000,
+            training_steps=50 * 1000, #100000,
             last_steps=0,#20000
             test_interval=100, #10000, 500
             log_interval=100,
@@ -44,23 +44,23 @@ class DeepSeaConfig(BaseConfig):
             lr_warm_up=0.01,
             lr_init=0.5 * 1E-3,    # torch_amp=0.2, none=1E-3,
             lr_decay_rate=0.1,     # 0.1
-            lr_decay_steps=80 * 1000,
+            lr_decay_steps=50 * 1000,
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
             start_transitions=300,   # 500 400 32 5000 1000
-            total_transitions=80 * 1000,
+            total_transitions=50 * 1000,
             transition_num=1,
             do_consistency=False,
             # frame skip & stack observation
             frame_skip=1,
             stacked_observations=1,     # 4 2
             # coefficient
-            reward_loss_coeff=0.1,
-            value_loss_coeff=0.05,  # 0.25 original # 1 0.5
-            policy_loss_coeff=0.05,
-            consistency_coeff=5.0,
-            ube_loss_coeff=0.025,
+            reward_loss_coeff=1.0,
+            value_loss_coeff=0.5,  # 0.25 original # 1 0.5
+            policy_loss_coeff=0.5,
+            consistency_coeff=2.0,
+            ube_loss_coeff=0.5,
             # reward sum
             lstm_hidden_size=64, #512
             use_value_prefix=False,
@@ -100,13 +100,13 @@ class DeepSeaConfig(BaseConfig):
         self.fc_representation_layers = [512, 512]
         self.fc_state_prediction_layers = [1024, 1024, 1024] # [1024, 1024, 1024] # [64] [128, 128] [1024, 1024, 1024]
         self.fc_state_prediction_prior_layers = [128, 128, 128] # [128, 128, 128]
-        self.fc_reward_layers = [128, 128] # [64, 64], [128, 128]
+        self.fc_reward_layers = [256, 256] # [64, 64], [128, 128]
         self.fc_reward_prior_layers = [256, 128]    # [128, 128]
-        self.fc_value_layers = [128, 128]           # [64, 64], [128, 128]
+        self.fc_value_layers = [256, 256]           # [64, 64], [128, 128]
         self.fc_value_prior_layers = [256, 128]     # [128, 128]
-        self.fc_policy_layers = [128, 128]          # [64, 64], [128, 128]
+        self.fc_policy_layers = [256, 256]          # [64, 64], [128, 128]
         # UBE architecture
-        self.fc_ube_layers = [128, 128, 128]
+        self.fc_ube_layers = [256, 256]
         self.categorical_ube = True
 
         # RND architecture

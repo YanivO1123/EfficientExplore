@@ -131,10 +131,10 @@ if __name__ == '__main__':
 
     if args.opr == 'train':
         if args.object_store_memory is not None:
-            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus,
-                object_store_memory=args.object_store_memory) # , RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE=1)
+            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus, object_store_memory=args.object_store_memory,
+                     address='local')   # , RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE=1)
         else:
-            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus)
+            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus, address='local')
     else:
         ray.init()
 

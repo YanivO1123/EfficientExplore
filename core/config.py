@@ -582,7 +582,7 @@ class BaseConfig(object):
             if self.learned_model:
                 self.rnd_scale = 0.1
             else:
-                self.rnd_scale = 10.0
+                self.rnd_scale = 1.0
 
 
         # MuExplore:
