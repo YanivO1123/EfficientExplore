@@ -200,7 +200,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         # The value_uncertainty_propagation_scale coeff is the sum of a geometric series with r = gamma ** 2 and
         # n = env_size. The idea is that for new states local variance prediction should be more reliable than ube
         self.value_uncertainty_propagation_scale = (1 - discount ** (observation_shape[-1] * 2)) / (1 - discount ** 2)
-        self.amplify_one_hot = 10
+        self.amplify_one_hot = 10.0
 
         assert 'identity' in self.representation_type or 'encoder' in self.representation_type \
                or 'concatted' in self.representation_type or 'learned' in self.representation_type, \
@@ -285,7 +285,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             prior_scale=self.prior_scale,
             use_encoder=self.use_encoder,
             representation_encoder=self.representation_encoder if not self.learned_model and self.use_encoder else None,
-            representation_type=representation_type
+            representation_type=representation_type,
+            amplify_one_hot=self.amplify_one_hot
         )
 
         # projection
@@ -431,16 +432,16 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
     def compute_value_rnd_uncertainty(self, state):
         state = state.reshape(-1, self.input_size_value_rnd).detach()
-        if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type):
-            state = state * (1 / self.amplify_one_hot)
+        # if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type):
+        #     state = state * (1 / self.amplify_one_hot)
         return self.rnd_scale * torch.nn.functional.mse_loss(self.value_rnd_network(state),
                                                              self.value_rnd_target_network(state).detach(),
                                                              reduction='none').sum(dim=-1)
 
     def compute_reward_rnd_uncertainty(self, state, action):
         flattened_state = state.reshape(-1, self.input_size_reward_rnd - self.action_space_size)
-        if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type):
-            flattened_state = flattened_state * (1 / self.amplify_one_hot)
+        # if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type):
+        #     flattened_state = flattened_state * (1 / self.amplify_one_hot)
 
         action_one_hot = (
             torch.zeros(
@@ -453,8 +454,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             .float()
         )
         action_one_hot.scatter_(1, action.long(), 1.0)
-        if self.learned_model:
-            action_one_hot = action_one_hot
+        if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type):
+            action_one_hot = action_one_hot * self.amplify_one_hot
 
         state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
 
@@ -551,6 +552,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
                  use_encoder=False,
                  representation_encoder=None,
                  representation_type=None,
+                 amplify_one_hot=1.0
                  ):
         """
         Non-resnet, non-conv dynamics network, for deep_sea.
@@ -580,6 +582,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         self.use_encoder = use_encoder
         self.representation_encoder = representation_encoder
         self.representation_type = representation_type
+        self.amplify_one_hot = amplify_one_hot
 
         # Init dynamics prediction, learned or given
         if learned_model:
@@ -631,7 +634,7 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             flattened_state = encoded_state.reshape(batch_size, -1)
             x = torch.cat((flattened_state, action_one_hot), dim=-1)
 
-            next_state = self.state_prediction_net(x) * 10
+            next_state = self.state_prediction_net(x) * self.amplify_one_hot
 
             if self.hidden_state_shape is not None:
                 next_state = next_state.reshape(-1, self.hidden_state_shape[0], self.hidden_state_shape[1],

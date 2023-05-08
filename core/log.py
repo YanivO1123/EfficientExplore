@@ -26,7 +26,7 @@ def _log(config, step_count, log_data, model, replay_buffer, lr, shared_storage,
     _msg = '#{:<10} Total Loss: {:<8.3f} [weighted Loss:{:<8.3f} Policy Loss: {:<8.3f} Value Loss: {:<8.3f} ' \
            'Reward Sum Loss: {:<8.3f} Consistency Loss: {:<8.3f} ] ' \
            'Replay Episodes Collected: {:<10d} Buffer Size: {:<10d} Transition Number: {:<8.3f}k ' \
-           'Batch Size: {:<10d} Lr: {:<8.3f}'
+           'Batch Size: {:<10d} Lr: {:<8.4f}'
     _msg = _msg.format(step_count, total_loss, weighted_loss, policy_loss, value_loss, value_prefix_loss, consistency_loss,
                        replay_episodes_collected, replay_buffer_size, total_num / 1000, config.batch_size, lr)
     train_logger.info(_msg)

@@ -580,7 +580,7 @@ class BaseConfig(object):
             self.deepsea_randomize_actions = not args.det_deepsea_actions
 
             if self.learned_model:
-                self.rnd_scale = 0.1
+                self.rnd_scale = 0.001
             else:
                 self.rnd_scale = 1.0
 

@@ -86,7 +86,7 @@ class DeepSeaConfig(BaseConfig):
             # ratio of training / interactions
             training_ratio=1,
             # UBE params
-            ube_td_steps=3,
+            ube_td_steps=1,
             reset_ube_interval=6000,
             rnd_scale=0.1,
             ube_support=DiscreteSupport(-10, 10, delta=1),
@@ -110,8 +110,8 @@ class DeepSeaConfig(BaseConfig):
         self.categorical_ube = True
 
         # RND architecture
-        self.fc_rnd_layers = [1024, 256]
-        self.fc_rnd_target_layers = [1024, 1024, 256]
+        self.fc_rnd_layers = [1024, 1024, 512]  # [1024, 256]
+        self.fc_rnd_target_layers = [512, 512]  # [1024, 1024, 256]
         self.fc_lstm_hidden_size = self.lstm_hidden_size
         # Encoder architecture
         self.use_encoder = False
@@ -141,7 +141,6 @@ class DeepSeaConfig(BaseConfig):
         # To reduce the effect of the policy on the selection, we reduce pb_c_init to 0.5.
         # This should give the policy about half the weight
         # self.pb_c_init = 0.5 # 1.25
-
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         # With mu explore in deep sea, we don't want to rely on random action selection

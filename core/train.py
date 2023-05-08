@@ -307,7 +307,7 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                                                                target_value_prefix_phi[:, step_i]) * mask_batch[:,
                                                                                                      step_i]
                 # Follow MuZero, set half gradient
-                if config.learned_model:
+                if model.learned_model and not 'deep_sea' in config.env_name:
                     hidden_state.register_hook(lambda grad: grad * 0.5)
 
                 # reset hidden states
@@ -879,36 +879,9 @@ def get_rnd_loss(model, next_state, batch_size, device, previous_state=None, act
         To compute the rnd error for reward, we take the previous-state and action.
         This is the reason both previous state and next state are passed to this function.
     """
-    local_loss = torch.zeros(batch_size, device=device)
-
-    if model.learned_model and ('concatted' in model.representation_type or 'identity' in model.representation_type):
-        next_state = next_state * (1 / model.amplify_one_hot)
-        if previous_state is not None:
-            previous_state = previous_state * (1 / model.amplify_one_hot)
-
-    # Compute value_rnd loss
-    state_for_rnd = next_state.reshape(-1, model.input_size_value_rnd).detach().to(device)
-    local_loss += torch.nn.functional.mse_loss(model.value_rnd_network(state_for_rnd),
-                                               model.value_rnd_target_network(state_for_rnd).detach(),
-                                               reduction='none').sum(dim=-1)
-    # Compute reward_rnd loss
+    local_loss = model.compute_value_rnd_uncertainty(next_state)
     if action is not None and previous_state is not None:
-        action_one_hot = (
-            torch.zeros(
-                (
-                    previous_state.shape[0],  # batch dimension
-                    model.action_space_size
-                )
-            )
-            .to(action.device)
-            .float()
-        )
-        action_one_hot.scatter_(1, action.long(), 1.0)
-        flattened_state = previous_state.reshape(-1, model.input_size_reward_rnd - model.action_space_size)
-        state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach().to(device)
-        local_loss += torch.nn.functional.mse_loss(model.reward_rnd_network(state_action),
-                                                   model.reward_rnd_target_network(state_action).detach(),
-                                                   reduction='none').sum(dim=-1)
+        local_loss += model.compute_reward_rnd_uncertainty(previous_state, action)
     return local_loss
 
 
