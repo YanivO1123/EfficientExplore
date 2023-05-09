@@ -133,6 +133,7 @@ class DataWorker(object):
             previous_visitation_counts = np.zeros(shape=(self.config.env_size, self.config.env_size))
             print(f"Initiated visitation counter", flush=True)
         unique_states_visited_so_far = []
+        unique_state_action_pairs_visited_so_far = []
         transitions_so_far = []
 
         try:
@@ -500,11 +501,14 @@ class DataWorker(object):
                                     if total_transitions % self.config.env_size == 0:
                                         number_of_unique_states = np.count_nonzero(self.visitation_counter.s_counts)
                                         unique_states_visited_so_far.append(number_of_unique_states)
+                                        unique_state_action_pairs_visited_so_far.append(np.count_nonzero(self.visitation_counter.sa_counts))
                                         transitions_so_far.append(total_transitions)
                                         np.save(self.config.exp_path + "/states_visited_per_step",
                                                 np.asarray(unique_states_visited_so_far))
                                         np.save(self.config.exp_path + "/steps_for_states_visited",
                                                 np.asarray(transitions_so_far))
+                                        np.save(self.config.exp_path + "/state_action_pairs_visited_per_step",
+                                                np.asarray(unique_state_action_pairs_visited_so_far))
                             except:
                                 traceback.print_exc()
 
