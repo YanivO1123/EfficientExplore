@@ -56,6 +56,7 @@ if __name__ == '__main__':
     # To distinguish local vs. cluster deployment
     parser.add_argument('--cluster', required=False, choices=['delft_blue', 'hpc', 'none'], default='none',
                         help="Used to setup different parameters per cluster used.")
+    parser.add_argument('--temp_path', required=False, default=None, help="To use a custom temp file for ray.")
     # MuExplore parameters
     parser.add_argument('--beta', type=float, default=None, help='Exploration / exploitation parameter, takes float >= 0')
     parser.add_argument('--mu_explore', action='store_true', default=False,
@@ -129,12 +130,14 @@ if __name__ == '__main__':
     assert args.revisit_policy_search_rate is None or 0 <= args.revisit_policy_search_rate <= 1, \
         ' Revisit policy search rate should be in [0,1]'
 
+    print(f"Custom tmp path: {args.temp_path}")
+
     if args.opr == 'train':
         if args.object_store_memory is not None:
             ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus, object_store_memory=args.object_store_memory,
                      address='local')   # , RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE=1)
         else:
-            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus, address='local')
+            ray.init(num_gpus=args.num_gpus, num_cpus=args.num_cpus, address='local', _temp_dir=args.temp_path)
     else:
         ray.init()
 

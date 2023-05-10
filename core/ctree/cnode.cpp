@@ -676,7 +676,7 @@ namespace tree{
     float cucb_score(CNode *child, tools::CMinMaxStats &min_max_stats, float parent_mean_q, int is_reset, float total_children_visit_counts, float parent_value_prefix, float pb_c_base, float pb_c_init, float discount, float parent_mean_q_uncertainty) {
         float pb_c = 0.0, prior_score = 0.0, value_score = 0.0, value_uncertainty_score = 0.0;
         pb_c = log((total_children_visit_counts + pb_c_base + 1) / pb_c_base) + pb_c_init;
-        pb_c *= (sqrt(total_children_visit_counts) / (child->visit_count + 0.2));
+        pb_c *= (sqrt(total_children_visit_counts) / (child->visit_count + 1));
 
         prior_score = pb_c * child->prior;
 
@@ -717,7 +717,7 @@ namespace tree{
     float cucb_score(CNode *child, tools::CMinMaxStats &min_max_stats, float parent_mean_q, int is_reset, float total_children_visit_counts, float parent_value_prefix, float pb_c_base, float pb_c_init, float discount){
         float pb_c = 0.0, prior_score = 0.0, value_score = 0.0;
         pb_c = log((total_children_visit_counts + pb_c_base + 1) / pb_c_base) + pb_c_init;
-        pb_c *= (sqrt(total_children_visit_counts) / (child->visit_count + 0.2));
+        pb_c *= (sqrt(total_children_visit_counts) / (child->visit_count + 1));
 
         prior_score = pb_c * child->prior;
 

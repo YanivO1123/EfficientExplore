@@ -60,7 +60,7 @@ class DeepSeaConfig(BaseConfig):
             value_loss_coeff=0.5,  # 0.25 original # 1 0.5
             policy_loss_coeff=0.5,
             consistency_coeff=2.0,
-            ube_loss_coeff=0.5,
+            ube_loss_coeff=0.125,
             # reward sum
             lstm_hidden_size=64, #512
             use_value_prefix=False,
@@ -87,7 +87,7 @@ class DeepSeaConfig(BaseConfig):
             training_ratio=1,
             # UBE params
             ube_td_steps=1,
-            reset_ube_interval=6000,
+            reset_ube_interval=5000,
             rnd_scale=0.1,
             ube_support=DiscreteSupport(-10, 10, delta=1),
         )

@@ -39,10 +39,29 @@ def plot_log(results, experiment_names, index=0, opt=None, sem=False):
                             [m[t] + s[t] for t in range(len(m))], color=colors[i], alpha=0.2)
         plt.plot(x, m, colors[i], label=experiment_names[i])
         plt.xlabel('Environmental steps', fontsize=8)   # Was 8 for separate experiments
-        plt.ylabel('Episodic reward', fontsize=8)       # Was 8 for separate experiments
+        plt.ylabel('Episodic return', fontsize=8)       # Was 8 for separate experiments
     if opt is not None:
         plt.plot([x[0], x[-1]], [opt, opt], ':k')
 
+def plot_exploration(results, experiment_names, index=0, opt=None, sem=False):
+    colors = get_color_names()
+    # Standard error of th mean or STD?
+    for i in range(len(results)):
+        data = results[i]
+        max_epi = np.min([len(s[-1]) for s in data])
+        # Bins:
+        # tried 100, 50, 30, 20. For mountaincar 30 looked best (smooth enough, junky enough to be believable).
+        # For slide, can go up to 100
+        bins = 30
+        x, m, s = smoothed_statistics([s[-1] for s in data], [s[index] for s in data], bins=bins, sem=sem)
+        if len(data) > 1:
+            plt.fill_between(x, [m[t] - s[t] for t in range(len(m))],
+                            [m[t] + s[t] for t in range(len(m))], color=colors[i], alpha=0.2)
+        plt.plot(x, m, colors[i], label=experiment_names[i])
+        plt.xlabel('Environmental steps', fontsize=8)   # Was 8 for separate experiments
+        plt.ylabel('Explored states', fontsize=8)       # Was 8 for separate experiments
+    if opt is not None:
+        plt.plot([x[0], x[-1]], [opt, opt], ':k')
 
 def repair_time_series(x: list):
     """ Linearly interpolates a time-series with missing (nan) values.

@@ -673,16 +673,15 @@ def _train(model, target_model, replay_buffer, shared_storage, batch_storage, co
             lr = config.lr_init
 
         # Periodically reset ube weights
-        # if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval * reset_index == 0:
-        #     reset_index = 1
-        #     try:
-        #         if 'deep_sea' in config.env_name:
-        #             visit_counter.s_counts = np.zeros(shape=visit_counter.observation_space_shape)
-        #             visit_counter.sa_counts = np.zeros(
-        #                 shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
-        #         reset_weights(model, config, step_count)
-        #     except:
-        #         traceback.print_exc()
+        if config.periodic_ube_weight_reset and step_count % config.reset_ube_interval == 0:
+            try:
+                if 'deep_sea' in config.env_name:
+                    visit_counter.s_counts = np.zeros(shape=visit_counter.observation_space_shape)
+                    visit_counter.sa_counts = np.zeros(
+                        shape=(visit_counter.observation_space_shape + (visit_counter.action_space,)))
+                reset_weights(model, config, step_count)
+            except:
+                traceback.print_exc()
 
         # update model for self-play
         if step_count % config.checkpoint_interval == 0:
@@ -886,47 +885,52 @@ def get_rnd_loss(model, next_state, batch_size, device, previous_state=None, act
 
 
 def reset_weights(model, config, step_count):
-    if config.reset_all_weights:
-        model.apply(fn=weight_reset)
-        print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
-              f"All weights have been reset: {step_count}\n"
-              f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
-              , flush=True)
-        if not config.learned_model:
-            model.dynamics_network.fc.apply(fn=init_kaiming_trunc_haiku)
-            model.value_network.apply(fn=init_kaiming_trunc_haiku)
-        if config.use_prior:
-            if not config.learned_model:
-                model.dynamics_network.fc_net_prior.apply(fn=init_kaiming_trunc_haiku)
-                model.value_network_prior.apply(fn=init_kaiming_trunc_haiku)
-            for p in model.dynamics_network.fc_net_prior.parameters():
-                p.requires_grad = False
-                p *= 2
-            for p in model.value_network_prior.parameters():
-                p.requires_grad = False
-                p *= 2
-    else:
-        if 'ube' in config.uncertainty_architecture_type:
-            model.ube_network.apply(fn=weight_reset)
-            print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
-                  f"ube_network has been reset, at training step: {step_count}\n"
-                  f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
-                  , flush=True)
-        if 'rnd' in config.uncertainty_architecture_type:
-            model.reward_rnd_network.apply(fn=weight_reset)
-            model.reward_rnd_target_network.apply(fn=weight_reset)
-            model.value_rnd_network.apply(fn=weight_reset)
-            model.value_rnd_target_network.apply(fn=weight_reset)
-            for p in model.value_rnd_target_network.parameters():
-                with torch.no_grad():
-                    p *= 4
-            for p in model.reward_rnd_target_network.parameters():
-                with torch.no_grad():
-                    p *= 4
-            print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
-                  f"both rnd networks have been reset, at training step: {step_count} \n"
-                  f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
-                  , flush=True)
+    model.dynamics_network.state_prediction_net.apply(fn=weight_reset)
+    print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+          f"model.dynamics_network.state_prediction_net has been reset, at training step: {step_count}\n"
+          f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+          , flush=True)
+    # if config.reset_all_weights:
+    #     model.apply(fn=weight_reset)
+    #     print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+    #           f"All weights have been reset: {step_count}\n"
+    #           f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+    #           , flush=True)
+    #     if not config.learned_model:
+    #         model.dynamics_network.fc.apply(fn=init_kaiming_trunc_haiku)
+    #         model.value_network.apply(fn=init_kaiming_trunc_haiku)
+    #     if config.use_prior:
+    #         if not config.learned_model:
+    #             model.dynamics_network.fc_net_prior.apply(fn=init_kaiming_trunc_haiku)
+    #             model.value_network_prior.apply(fn=init_kaiming_trunc_haiku)
+    #         for p in model.dynamics_network.fc_net_prior.parameters():
+    #             p.requires_grad = False
+    #             p *= 2
+    #         for p in model.value_network_prior.parameters():
+    #             p.requires_grad = False
+    #             p *= 2
+    # else:
+    #     if 'ube' in config.uncertainty_architecture_type:
+    #         model.ube_network.apply(fn=weight_reset)
+    #         print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+    #               f"ube_network has been reset, at training step: {step_count}\n"
+    #               f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+    #               , flush=True)
+    #     if 'rnd' in config.uncertainty_architecture_type:
+    #         model.reward_rnd_network.apply(fn=weight_reset)
+    #         model.reward_rnd_target_network.apply(fn=weight_reset)
+    #         model.value_rnd_network.apply(fn=weight_reset)
+    #         model.value_rnd_target_network.apply(fn=weight_reset)
+    #         for p in model.value_rnd_target_network.parameters():
+    #             with torch.no_grad():
+    #                 p *= 4
+    #         for p in model.reward_rnd_target_network.parameters():
+    #             with torch.no_grad():
+    #                 p *= 4
+    #         print(f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+    #               f"both rnd networks have been reset, at training step: {step_count} \n"
+    #               f"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+    #               , flush=True)
 
 
 def debug_uncertainty(model, config, training_step, device, visit_counter, batch):
