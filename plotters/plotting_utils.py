@@ -1,3 +1,4 @@
+import numpy
 from matplotlib import pyplot as plt
 import numpy as np
 import matplotlib.colors as mcolors
@@ -23,7 +24,7 @@ def get_color_names(all_colors=False):
     return colors
 
 
-def plot_log(results, experiment_names, index=0, opt=None, sem=False):
+def plot_log(results, experiment_names, index=0, opt=None, sem=False, bins=30):
     colors = get_color_names()
     # Standard error of th mean or STD?
     for i in range(len(results)):
@@ -32,18 +33,18 @@ def plot_log(results, experiment_names, index=0, opt=None, sem=False):
         # Bins:
         # tried 100, 50, 30, 20. For mountaincar 30 looked best (smooth enough, junky enough to be believable).
         # For slide, can go up to 100
-        bins = 30
         x, m, s = smoothed_statistics([s[-1] for s in data], [s[index] for s in data], bins=bins, sem=sem)
         if len(data) > 1:
             plt.fill_between(x, [m[t] - s[t] for t in range(len(m))],
                             [m[t] + s[t] for t in range(len(m))], color=colors[i], alpha=0.2)
         plt.plot(x, m, colors[i], label=experiment_names[i])
-        plt.xlabel('Environmental steps', fontsize=8)   # Was 8 for separate experiments
-        plt.ylabel('Episodic return', fontsize=8)       # Was 8 for separate experiments
+        plt.xlabel('Environment steps', fontsize=7)   # Was 8 for separate experiments
+        plt.ylabel('Undiscounted episodic return', fontsize=7)       # Was 8 for separate experiments
     if opt is not None:
         plt.plot([x[0], x[-1]], [opt, opt], ':k')
 
-def plot_exploration(results, experiment_names, index=0, opt=None, sem=False):
+
+def plot_log_ax(results, experiment_names, ax, index=0, opt=None, sem=False, bins=30):
     colors = get_color_names()
     # Standard error of th mean or STD?
     for i in range(len(results)):
@@ -52,16 +53,61 @@ def plot_exploration(results, experiment_names, index=0, opt=None, sem=False):
         # Bins:
         # tried 100, 50, 30, 20. For mountaincar 30 looked best (smooth enough, junky enough to be believable).
         # For slide, can go up to 100
-        bins = 30
+        x, m, s = smoothed_statistics([s[-1] for s in data], [s[index] for s in data], bins=bins, sem=sem)
+        if len(data) > 1:
+            ax.fill_between(x, [m[t] - s[t] for t in range(len(m))],
+                            [m[t] + s[t] for t in range(len(m))], color=colors[i], alpha=0.2)
+        ax.plot(x, m, colors[i], label=experiment_names[i])
+        ax.set_xlabel('Environment steps', fontsize=7)   # Was 8 for separate experiments
+        ax.set_ylabel('Undiscounted episodic return', fontsize=7)       # Was 8 for separate experiments
+    if opt is not None:
+        ax.plot([x[0], x[-1]], [opt, opt], ':k')
+
+def plot_exploration(results, experiment_names, index=0, opt=None, sem=False, bins=30, plot_zero=False):
+    colors = get_color_names()
+    # Standard error of th mean or STD?
+    for i in range(len(results)):
+        data = results[i]
+        max_epi = np.min([len(s[-1]) for s in data])
+        # Bins:
+        # tried 100, 50, 30, 20. For mountaincar 30 looked best (smooth enough, junky enough to be believable).
+        # For slide, can go up to 100
         x, m, s = smoothed_statistics([s[-1] for s in data], [s[index] for s in data], bins=bins, sem=sem)
         if len(data) > 1:
             plt.fill_between(x, [m[t] - s[t] for t in range(len(m))],
                             [m[t] + s[t] for t in range(len(m))], color=colors[i], alpha=0.2)
+        if x[0] > 0 and plot_zero:
+            x = np.insert(x, 0, 0)
+            m = np.insert(m, 0, 0)
         plt.plot(x, m, colors[i], label=experiment_names[i])
-        plt.xlabel('Environmental steps', fontsize=8)   # Was 8 for separate experiments
-        plt.ylabel('Explored states', fontsize=8)       # Was 8 for separate experiments
+        plt.xlabel('Environment steps', fontsize=7)   # Was 8 for separate experiments
+        plt.ylabel('Discovered states', fontsize=7)       # Was 8 for separate experiments
     if opt is not None:
         plt.plot([x[0], x[-1]], [opt, opt], ':k')
+
+
+def plot_exploration_ax(results, experiment_names, ax, index=0, opt=None, sem=False, bins=30, plot_zero=False):
+    colors = get_color_names()
+    # Standard error of th mean or STD?
+    for i in range(len(results)):
+        data = results[i]
+        max_epi = np.min([len(s[-1]) for s in data])
+        # Bins:
+        # tried 100, 50, 30, 20. For mountaincar 30 looked best (smooth enough, junky enough to be believable).
+        # For slide, can go up to 100
+        x, m, s = smoothed_statistics([s[-1] for s in data], [s[index] for s in data], bins=bins, sem=sem)
+        if len(data) > 1:
+            ax.fill_between(x, [m[t] - s[t] for t in range(len(m))],
+                            [m[t] + s[t] for t in range(len(m))], color=colors[i], alpha=0.2)
+        if x[0] > 0 and plot_zero:
+            x = np.insert(x, 0, 0)
+            m = np.insert(m, 0, 0)
+        ax.plot(x, m, colors[i], label=experiment_names[i])
+        ax.set_xlabel('Environment steps', fontsize=7)   # Was 8 for separate experiments
+        ax.set_ylabel('Discovered states', fontsize=7)       # Was 8 for separate experiments
+    if opt is not None:
+        ax.plot([x[0], x[-1]], [opt, opt], ':k')
+
 
 def repair_time_series(x: list):
     """ Linearly interpolates a time-series with missing (nan) values.
@@ -104,45 +150,6 @@ def smoothed_statistics(xs, ys, bins=100, sem=False):
     if sem: sy = [si / np.sqrt(len(xs)) for si in sy]
     # return hx, my, sy
     return hx[1:], my[1:], sy[1:] # this line for the negative reward experiments, to ignore false first entry in results
-
-
-def load_results(path, x_name=["num_played_steps.npy", "played_steps.npy", "played.npy"], y_name=["total_rewards.npy", "rewards.npy"]):
-    """
-        Loads the results for a specific experiment (for example, mountaincar exploratory counter uncertainty)
-         with _ seeds (for example, 10) into one list, the way the smoother wants
-    """
-    # Make a list of the different seeds' folder names
-    dir_names = sorted([dir_name for dir_name in os.listdir(path)])
-
-    # Make a list of the separate files
-    results_file_names = [
-        [
-            path + dir_name + "/" + filename
-            for filename in sorted(
-            os.listdir(path + dir_name)
-        )
-            if filename.endswith(".npy")
-        ] for dir_name in dir_names
-    ]
-
-    experiment_results = []
-
-    # For each seed
-    for seed in results_file_names:
-        # For each result-file
-        for result_file in seed:
-            if x_name[0] in result_file:
-                new_file_name = os.path.dirname(result_file) + "/played_steps.npy"
-                os.rename(result_file, new_file_name)
-                xs = np.load(new_file_name)
-            if x_name[1] in result_file or x_name[2] in result_file:
-                xs = np.load(result_file, allow_pickle=True)
-            elif y_name[0] in result_file or y_name[1] in result_file:
-                ys = np.load(result_file)
-
-        experiment_results.append([ys, xs])
-
-    return experiment_results
 
 
 def plot_heat_maps(s_counts, sa_counts=None, count_cap=None):

@@ -426,7 +426,7 @@ class DataWorker(object):
                                 # With UBE and WITHOUT MuExplore, ube_predictions need to be computed by the NN.
                                 elif 'ube' in self.config.uncertainty_architecture_type:
                                     q_uncertainties = ube_predictions[:, i]     # For all actions :, for environment i
-                                    q_values = [q_value + self.config.beta * uncertainty
+                                    q_values = [q_value + self.config.beta * np.sqrt(abs(uncertainty))
                                                 for (q_value, uncertainty) in zip(q_values, q_uncertainties)]
                                 else:
                                     print(f"WARNING: Using select_q_based_action in exploration episodes WITHOUT either "
