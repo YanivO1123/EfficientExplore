@@ -78,6 +78,10 @@ if __name__ == '__main__':
     parser.add_argument('--uncertainty_architecture_type', required=False,
                         choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube', 'ube', 'none'], default='none',
                         help="Decides the type of uncertainty to be used. No all are implemented for every env.")
+    parser.add_argument('--use_forward_propagation', action='store_true', default=False,
+                        help="Uses the state-uncertainty matrix and Jacobians to approximate the forward-propagation "
+                             "component of uncertainty. Results in significantly more computationally heavy MCTS. "
+                             "Only applicable with UBE.")
     # Deep_sea specific parameters
     parser.add_argument('--visit_counter', action='store_true', default=False,
                         help="If the env. is deep sea, use the visit counter for uncertainty estimation. "

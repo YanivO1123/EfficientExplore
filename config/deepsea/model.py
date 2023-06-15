@@ -527,6 +527,92 @@ class FullyConnectedEfficientExploreNet(BaseNet):
 
             return scalar_variance
 
+    def get_jacobians(self, state, action, next_state):
+        """
+            Expecting state of shape [B, N x N], action of shape [B, 1] and next_state of shape [B, N]
+        """
+        with torch.no_grad():
+            assert len(state.shape) == len(action.shape) == len(next_state.shape) == 2, \
+                f"state.shape = {state.shape}, action.shape = {action.shape}, " \
+                f"next_state.shape = {next_state.shape}"
+
+            # Stack state and action
+            batch_size = state.shape[0]
+            action_space_size = 2
+            action_one_hot = (
+                torch.zeros(
+                    size=(
+                        batch_size,  # batch dimension
+                        action_space_size  # action space size
+                    )
+                )
+                .to(action.device)
+                .float()
+            )
+            action_one_hot.scatter_(1, action.long(), 1.0)
+            flattened_state = state.reshape(batch_size, -1)
+            state_action = torch.cat((flattened_state, action_one_hot), dim=-1)
+
+            assert len(state_action.shape) == 2
+
+            # Get Jacobian of f with respect to state, action
+            J_f = self.batch_jacobian(self.transition_function, state_action)
+            # From J_f get the part that is with respect to s only
+            J_f = J_f[:, :, :-2]
+
+            # Get Jacobian of r with respect to state, action
+            J_r = self.batch_jacobian(self.reward_function, state_action)
+            # Get Jacobian of r with respect to state only out of it
+            J_r = J_r[:, :, :-2]
+
+            # Get Jacobian of v with respect to next_state
+            J_v = self.batch_jacobian(self.value_function, next_state)
+            # print(f"In get_jacobians, printing shapes: \n"
+            #       f"state_action.shape = {state_action.shape} \n"
+            #       f"next_state.shape = {next_state.shape} \n"
+            #       f"And expecting: [B, N * N], [B, N]. \n"
+            #       f"Now printing Jacobian shapes: \n"
+            #       f"J_f.shape = {J_f.shape} \n"
+            #       f"J_r.shape = {J_r.shape} \n"
+            #       f"J_v.shape = {J_v.shape} \n"
+            #       f"And expecting: "
+            #       f"[B, N * N, N * N] for state, and [B, N, 1] for reward and value"
+            #       )
+
+            return J_f, J_r, J_v
+
+    def reward_function(self, state_action):
+        """
+            Used exclusively for the Jacobian computation
+        """
+        # run through dynamics
+        reward_prediction = self.dynamics_network.fc(state_action)
+
+        # run through reverse reshape function
+        reward_prediction = self.inverse_reward_transform(reward_prediction)
+        return reward_prediction
+
+    def value_function(self, state):
+        """
+            Used exclusively for the Jacobian computation
+        """
+        value_prediction = self.value_network(state)
+        value_prediction = self.inverse_value_transform(value_prediction)
+
+        return value_prediction
+
+    def transition_function(self, state_action):
+        """
+            Used exclusively for the Jacobian computation
+            The state_action param is of form (state, action)
+        """
+        next_state_prediction = self.dynamics_network.state_prediction_net(state_action) * self.amplify_one_hot
+        return next_state_prediction
+
+    def batch_jacobian(self, f, x):
+        f_sum = lambda x: torch.sum(f(x), axis=0)
+        return torch.autograd.functional.jacobian(f_sum, x).permute(1,0,2)
+
 
 class FullyConnectedDynamicsNetwork(nn.Module):
     def __init__(self,
@@ -610,11 +696,11 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             self.bn_value_prefix = None
         else:
             # The input to the lstm is the concat tensor of hidden_state and action
-            self.lstm = nn.LSTM(input_size=dynamics_input_size, hidden_size=lstm_hidden_size)
-            self.bn_value_prefix = nn.BatchNorm1d(lstm_hidden_size, momentum=momentum)
-            self.fc = mlp(lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero,
-                          momentum=momentum)
-            # self.fc = no_batch_norm_mlp(lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero)
+            # self.lstm = nn.LSTM(input_size=dynamics_input_size, hidden_size=lstm_hidden_size)
+            # self.bn_value_prefix = nn.BatchNorm1d(lstm_hidden_size, momentum=momentum)
+            # self.fc = mlp(lstm_hidden_size, fc_reward_layers, full_support_size, init_zero=init_zero,
+            #               momentum=momentum)
+            self.fc = no_batch_norm_mlp(dynamics_input_size, fc_reward_layers, full_support_size, init_zero=init_zero)
 
     def forward(self, reward_hidden, encoded_state, action):
         if self.learned_model:
@@ -690,12 +776,12 @@ class FullyConnectedDynamicsNetwork(nn.Module):
             else:
                 value_prefix = [value_prefix_net(x) for value_prefix_net in self.fc]
         else:
-            x = x.unsqueeze(0)
-            value_prefix, reward_hidden = self.lstm(x, reward_hidden)
-            value_prefix = value_prefix.squeeze(0)
-            value_prefix = self.bn_value_prefix(value_prefix)
-            value_prefix = nn.functional.relu(value_prefix)
-            value_prefix = self.fc(value_prefix)
+            # x = x.unsqueeze(0)
+            # value_prefix, reward_hidden = self.lstm(x, reward_hidden)
+            # value_prefix = value_prefix.squeeze(0)
+            # value_prefix = self.bn_value_prefix(value_prefix)
+            # value_prefix = nn.functional.relu(value_prefix)
+            value_prefix = self.fc(x)
 
         return next_state, reward_hidden, value_prefix
 

@@ -594,6 +594,7 @@ class BaseConfig(object):
         assert (args.mu_explore == (self.use_uncertainty_architecture or self.use_visitation_counter)) or (
             not args.mu_explore)  # MuExplore is only applicable with some uncertainty mechanism
         self.mu_explore = args.mu_explore and (self.use_uncertainty_architecture or self.use_visitation_counter)
+        self.use_forward_propagation = args.use_forward_propagation and self.mu_explore
         self.use_deep_exploration = self.mu_explore or \
                                     ('ube' in self.uncertainty_architecture_type and args.use_deep_exploration)
         if args.beta is not None and args.beta >= 0:

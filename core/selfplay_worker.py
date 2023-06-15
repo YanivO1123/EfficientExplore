@@ -368,7 +368,14 @@ class DataWorker(object):
                                           policy_logits_pool)
 
                         # do MCTS for a policy
-                        if self.config.plan_with_visitation_counter and self.visitation_counter is not None:
+                        if self.config.use_forward_propagation:
+                            MCTS(self.config).search_w_forward_propagation(roots, model, hidden_state_roots,
+                                                                          reward_hidden_roots,
+                                                                          self.visitation_counter,
+                                                                          initial_observations_for_counter,
+                                                                          use_state_visits=self.config.plan_with_state_visits,
+                                                                          sampling_times=self.config.sampling_times)
+                        elif self.config.plan_with_visitation_counter and self.visitation_counter is not None:
                             # If we plan with a visitation counter for MuExplore (only implemented for deep_sea)
                             MCTS(self.config).search_w_visitation_counter(roots, model, hidden_state_roots,
                                                                           reward_hidden_roots,
