@@ -671,7 +671,7 @@ class DataWorker(object):
                 assert observations_roots_for_counter is not None, f"observations_roots_for_counter must not be None" \
                                                                    f"for counter based local uncertainty"
                 reward_uncertainties_from_counter = self.visitation_counter.get_reward_uncertainty(
-                    observations_roots_for_counter, np_actions, use_state_visits=self.config.plan_with_state_visits).squeeze()
+                    observations_roots_for_counter, np_actions, use_state_visits=self.config.plan_with_state_visits).squeeze(-1)
                 assert np.shape(reward_uncertainties_from_counter) == np.shape(network_output.value_variance), \
                     f"np.shape(reward_uncertainties_from_counter) = {np.shape(reward_uncertainties_from_counter)} ," \
                     f"np.shape(network_output.value_variance) = {np.shape(network_output.value_variance)} " \

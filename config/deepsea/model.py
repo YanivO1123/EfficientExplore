@@ -357,8 +357,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             zeros_one_hot = torch.zeros(2 * N).to(device)
 
             # Get the indexes of the 1 hot along the B dimension, and shape them to 1 dim vectors of size batch_size
-            rows = (flattened_observation.argmax(dim=-1) // N).long().squeeze(-1).to(device)
-            columns = (flattened_observation.argmax(dim=-1) % N).long().squeeze(-1).to(device)
+            rows = (flattened_observation.argmax(dim=-1) // N).long().reshape(B).to(device)
+            columns = (flattened_observation.argmax(dim=-1) % N).long().reshape(B).to(device)
             one_hot_rows = torch.nn.functional.one_hot(rows, N).to(device)
             one_hot_cols = torch.nn.functional.one_hot(columns, N).to(device)
 
@@ -518,7 +518,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             # Resulting shape of scalar_variance: (num_parallel_envs, full_support_size)
 
             # Sum the per-entry variance scores
-            scalar_variance = scalar_variance.sum(-1).squeeze()
+            scalar_variance = scalar_variance.sum(-1).squeeze(-1)
             # Resulting shape of scalar_variance: (num_parallel_envs)
 
             assert len(scalar_variance.shape) == 1 and scalar_variance.shape[0] == batch_size, \

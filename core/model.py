@@ -225,7 +225,7 @@ class BaseNet(nn.Module):
                                                                       f"{batch_size}"
                         ube_prediction = self.compute_ube_uncertainty(next_state)
                         if self.categorical_ube or len(ube_prediction.shape) > 1:
-                            ube_prediction = self.inverse_ube_transform(ube_prediction).squeeze()
+                            ube_prediction = self.inverse_ube_transform(ube_prediction).squeeze(-1)
                             assert ube_prediction.shape == value_variance.shape, \
                                 f"ube_prediction.shape = {ube_prediction.shape}, " \
                                 f"value_variance.shape = {value_variance.shape}, and should be equal." \
@@ -236,7 +236,7 @@ class BaseNet(nn.Module):
                     else:
                         ube_prediction = self.compute_ube_uncertainty(next_state)
                         if self.categorical_ube or len(ube_prediction.shape) > 1:
-                            ube_prediction = self.inverse_ube_transform(ube_prediction).squeeze()
+                            ube_prediction = self.inverse_ube_transform(ube_prediction).squeeze(-1)
                         ube_prediction = ube_prediction.abs()
                         value_variance = ube_prediction
                     # Upper bound the propagated value and compute:

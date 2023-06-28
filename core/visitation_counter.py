@@ -3,6 +3,7 @@ import torch
 from bsuite import sweep
 # from bsuite.environments.deep_sea import DeepSea
 from config.deepsea.extended_deep_sea import DeepSea
+import traceback
 
 # Taken from Wendelin's implementation in the DRL HW explore
 class CountUncertainty:
@@ -74,8 +75,9 @@ class CountUncertainty:
             # Flatten 1 hot representation
             flattened_batched_state = state.reshape((batch_size, N * N))
             # Get the indexes of the 1 hot along the B dimension, and shape them to 1 dim vectors of size batch_size
-            rows, columns = (flattened_batched_state.argmax(axis=1) // N).astype(dtype=int).squeeze(), (
-                    flattened_batched_state.argmax(axis=1) % N).astype(dtype=int).squeeze()
+            rows, columns = (flattened_batched_state.argmax(axis=1) // N).astype(dtype=int).reshape(batch_size), (
+                    flattened_batched_state.argmax(axis=1) % N).astype(dtype=int).reshape(batch_size)
+
             indexes_of_states = np.stack((rows, columns), axis=1)
 
             # Unvectorized code
@@ -88,6 +90,20 @@ class CountUncertainty:
             #         indexes = (state[i] == 1).nonzero()
             #         index_row, index_column = indexes[0][0], indexes[1][0]
             #         indexes_of_states.append([index_row, index_column])
+            return indexes_of_states
+        elif len(np.shape(state)) == 4:
+            # Flatten 1 hot representation
+            state = np.asarray(state)
+            batch_size = state.shape[0]
+            unroll_length = state.shape[1]
+            N = state.shape[-1]
+            # Flatten 1 hot representation
+            flattened_batched_state = state.reshape((batch_size, unroll_length, N * N))
+            # Get the indexes of the 1 hot along the B dimension, and shape them to 1 dim vectors of size batch_size
+            rows, columns = (flattened_batched_state.argmax(axis=-1) // N).astype(dtype=int).reshape((batch_size, unroll_length)), \
+                            (flattened_batched_state.argmax(axis=-1) % N).astype(dtype=int).reshape((batch_size, unroll_length))
+
+            indexes_of_states = np.stack((rows, columns), axis=1)
             return indexes_of_states
         else:
             raise ValueError(f"from_one_hot_state_to_indexes is not ")
@@ -111,6 +127,39 @@ class CountUncertainty:
             self.s_counts[state[0], state[1]] += 1
             self.sa_counts[state[0], state[1], action] += 1
             self.observation_counter += 1
+        # Alternatively, if we got a state in [B, H, W] form
+        elif len(state.shape) == 3:
+            batch_size, H, W = state.shape
+            action = action.reshape(batch_size)
+            indexes_of_states = self.from_one_hot_state_to_indexes(state)
+            rows, columns = indexes_of_states[:, 0], indexes_of_states[:, 1]
+            for i in range(batch_size):
+                row, column = rows[i], columns[i]
+                if row >= 0 and column >= 0:
+                    self.s_counts[row, column] += 1
+                    self.sa_counts[row, column, action[i]] += 1
+                    self.observation_counter += 1
+        elif len(state.shape) == 4:
+            batch_size, unroll_length, H, W = state.shape
+            action = action.reshape(batch_size, unroll_length)
+            batch_size = state.shape[0]
+            unroll_length = state.shape[1]
+            rows, columns = self.from_one_hot_state_to_indexes(state)
+            assert state.shape[0] == action.shape[0] and state.shape[1] == action.shape[1], \
+                f"state.shape = {state.shape} and action.shape = {action.shape}, and should be equal across first two " \
+                f"dims (batch size and unroll length)"
+            for i in range(batch_size):
+                for j in range(unroll_length):
+                    row, column = rows[i, j], columns[i, j]
+                    # If the state is not the null state
+                    if row >= 0 and column >= 0:
+                        self.s_counts[row, column] += 1
+                        self.sa_counts[row, column, action[i, j]] += 1
+                        self.observation_counter += 1
+        else:
+            raise ValueError(f"Received state in unexpected form. "
+                             f"Can only observe states of shapes [B, H, W], [H, W] and [2], "
+                             f"and received state of shape: {state.shape} and action of shape {action.shape}")
 
     def get_next_true_observation(self, states, actions):
         """"
@@ -271,10 +320,11 @@ class CountUncertainty:
         """
         # If state is a tensor of shape [B, S x C, H, W]:
         if len(np.shape(state)) == 4:
+            state = np.asarray(state)
             # First we need to rework this to shape [B, -1, H, W]
             state = state[:, -1, :, :]
             # Make sure the new shape is [B, H, W]
-            state = state.squeeze()
+            # state = state.squeeze()
             # Then we need to get the indexes
             state = self.from_one_hot_state_to_indexes(state)
             # Finally, compute the uncertainty for each state
@@ -353,12 +403,12 @@ class CountUncertainty:
                 If <= 0, do a complete tree of depth propagation_horizon
         """
         if len(np.shape(state)) == 4:   # If shape = [B, C * S, H, W]
-            np.asarray(state)
+            state = np.asarray(state)
             # First we need to rework this to shape [B, 1, H, W] by taking the last observation in S * C
             # Because C = 1 and S is stacked obs.
             state = state[:, -1, :, :]
             # Make sure the new shape is [B, H, W]
-            state = state.squeeze()
+            # state = state.squeeze()
             # Then we need to get the indexes
             state = self.from_one_hot_state_to_indexes(state)
             # Finally, we can compute the unc.
