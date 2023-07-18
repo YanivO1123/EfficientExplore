@@ -373,8 +373,7 @@ class DataWorker(object):
                                                                           reward_hidden_roots,
                                                                           self.visitation_counter,
                                                                           initial_observations_for_counter,
-                                                                          use_state_visits=self.config.plan_with_state_visits,
-                                                                          sampling_times=self.config.sampling_times)
+                                                                          use_state_visits=self.config.plan_with_state_visits)
                         elif self.config.plan_with_visitation_counter and self.visitation_counter is not None:
                             # If we plan with a visitation counter for MuExplore (only implemented for deep_sea)
                             MCTS(self.config).search_w_visitation_counter(roots, model, hidden_state_roots,
@@ -384,7 +383,9 @@ class DataWorker(object):
                                                                           use_state_visits=self.config.plan_with_state_visits,
                                                                           sampling_times=self.config.sampling_times)
                         else:   # Otherwise
-                            MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=True)
+                            MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots, acting=True,
+                                                     recurrent_rnd_hidden_state_roots=
+                                                     network_output.recurrent_rnd_hidden_state)
 
                         roots_distributions = roots.get_distributions()
                         roots_values = roots.get_values()
@@ -484,7 +485,9 @@ class DataWorker(object):
                                                     or 'concatted' in self.config.representation_type) and \
                                                     self.config.do_consistency:
                                                 self.debug_state_prediction(model, total_transitions)
-                                            if 'deep_sea' in self.config.env_name and not self.config.plan_with_visitation_counter:
+                                            if 'deep_sea' in self.config.env_name and not \
+                                                    self.config.plan_with_visitation_counter and 'r_rnd' not in \
+                                                    self.config.uncertainty_architecture_type:
                                                 self.debug_deep_sea(model)
                                 if self.config.mu_explore and total_transitions > 0:
                                     root_values_uncertainties = roots.get_values_uncertainty()
@@ -546,7 +549,8 @@ class DataWorker(object):
 
                             if 'deep_sea' in self.config.env_name and self.config.evaluate_uncertainty and \
                                     total_transitions in self.config.evaluate_uncertainty_at and \
-                                    self.config.use_deep_exploration and not self.config.plan_with_visitation_counter:
+                                    self.config.use_deep_exploration and not self.config.plan_with_visitation_counter \
+                                    and 'r_rnd' not in self.config.uncertainty_architecture_type:
                                 try:
                                     self.evaluate_uncertainty(model=model, step_count=total_transitions)
                                 except:
@@ -671,7 +675,7 @@ class DataWorker(object):
                 assert observations_roots_for_counter is not None, f"observations_roots_for_counter must not be None" \
                                                                    f"for counter based local uncertainty"
                 reward_uncertainties_from_counter = self.visitation_counter.get_reward_uncertainty(
-                    observations_roots_for_counter, np_actions, use_state_visits=self.config.plan_with_state_visits).squeeze(-1)
+                    observations_roots_for_counter, np_actions, use_state_visits=self.config.plan_with_state_visits).reshape(-1)
                 assert np.shape(reward_uncertainties_from_counter) == np.shape(network_output.value_variance), \
                     f"np.shape(reward_uncertainties_from_counter) = {np.shape(reward_uncertainties_from_counter)} ," \
                     f"np.shape(network_output.value_variance) = {np.shape(network_output.value_variance)} " \

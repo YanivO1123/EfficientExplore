@@ -16,6 +16,7 @@ class NetworkOutput(typing.NamedTuple):
     reward_hidden: object
     value_variance: float
     value_prefix_variance: float
+    recurrent_rnd_hidden_state: List[List[float]]
 
 
 def concat_output_value(output_lst):
@@ -78,6 +79,8 @@ def concat_uncertainty_output(output_lst):
     # concat the model output
     value_variance_lst, reward_variance_lst, policy_logits_lst, hidden_state_lst = [], [], [], []
     reward_hidden_c_lst, reward_hidden_h_lst = [], []
+    rnd_hidden_states_1, rnd_hidden_states_2 = [], []
+
     for output in output_lst:
         value_variance_lst.append(output.value_variance)
         reward_variance_lst.append(output.value_prefix_variance)
@@ -85,6 +88,8 @@ def concat_uncertainty_output(output_lst):
         hidden_state_lst.append(output.hidden_state)
         reward_hidden_c_lst.append(output.reward_hidden[0].squeeze(0))
         reward_hidden_h_lst.append(output.reward_hidden[1].squeeze(0))
+        rnd_hidden_states_1.append(output.recurrent_rnd_hidden_state[0])
+        rnd_hidden_states_2.append(output.recurrent_rnd_hidden_state[1])
 
     value_variance_lst = np.concatenate(value_variance_lst)
     reward_variance_lst = np.concatenate(reward_variance_lst)
@@ -92,9 +97,11 @@ def concat_uncertainty_output(output_lst):
     hidden_state_lst = np.concatenate(hidden_state_lst)
     reward_hidden_c_lst = np.expand_dims(np.concatenate(reward_hidden_c_lst), axis=0)
     reward_hidden_h_lst = np.expand_dims(np.concatenate(reward_hidden_h_lst), axis=0)
+    rnd_hidden_states_1 = np.concatenate(rnd_hidden_states_1)
+    rnd_hidden_states_2 = np.concatenate(rnd_hidden_states_2)
 
     return value_variance_lst, reward_variance_lst, policy_logits_lst, hidden_state_lst, (
-        reward_hidden_c_lst, reward_hidden_h_lst)
+        reward_hidden_c_lst, reward_hidden_h_lst), (rnd_hidden_states_1, rnd_hidden_states_2)
 
 
 class BaseNet(nn.Module):
@@ -147,7 +154,8 @@ class BaseNet(nn.Module):
     def compute_ube_uncertainty(self, state):
         raise NotImplementedError
 
-    def compute_uncertainty(self, previous_state=None, next_state=None, action=None, value=None, value_prefix=None):
+    def compute_uncertainty(self, previous_state=None, next_state=None, action=None, value=None, value_prefix=None,
+                            initial_observation=None, recurrent_rnd_hidden_state=None):
         """
             This function deals with all the different cases of uncertainty estimation implemented.
             The following cases are implemented:
@@ -198,19 +206,27 @@ class BaseNet(nn.Module):
                     if isinstance(value_prefix, list):
                         value_prefix_variance = self.ensemble_prediction_to_variance(value_prefix).detach()
                 # Case RND
-                elif 'rnd' in self.uncertainty_type:
+                elif 'rnd' in self.uncertainty_type and 'r_rnd' not in self.uncertainty_type:
                     assert self.value_uncertainty_propagation_scale is not None
                     value_variance = self.compute_value_rnd_uncertainty(next_state)
                     if action is not None:
                         # Compute reward-unc. as epistemic unc. associated with NEXT state as well as transition
                         # (previous state + action)
                         value_prefix_variance = self.compute_reward_rnd_uncertainty(previous_state, action)
+                elif 'r_rnd' in self.uncertainty_type:
+                    if action is not None and recurrent_rnd_hidden_state is not None:
+                        value_prefix_variance, recurrent_rnd_hidden_state = self.recurrent_rnd.recurrent_rnd_uncertainty(action, recurrent_rnd_hidden_state)
+                    elif initial_observation is not None:
+                        recurrent_rnd_hidden_state = self.recurrent_rnd.representation(initial_observation)
+                    if recurrent_rnd_hidden_state is not None:
+                        recurrent_rnd_hidden_state = (recurrent_rnd_hidden_state[0].cpu().numpy(), recurrent_rnd_hidden_state[1].cpu().numpy())
+                
                 # Cap local uncertainty at 1
                 # value_prefix_variance = torch.minimum(value_prefix_variance, torch.ones_like(value_prefix_variance)
                 #                                       .to(value_prefix_variance.device))
                 # We compute the local uncertainty in the value of next state as the sum of next_state_based_uncertainty
                 # (value_uncertainty) and previous-state-and-action uncertainty (value_prefix_uncertainty).
-                if value_prefix_variance is not None and value_variance is not None:
+                if value_prefix_variance is not None:
                     # value_variance = value_variance + value_prefix_variance
                     value_variance = value_prefix_variance
 
@@ -245,7 +261,14 @@ class BaseNet(nn.Module):
                     #                  (1 - value_prefix_variance) * ube_prediction.abs()
 
                 return value_variance.cpu().numpy() if value_variance is not None else None, \
-                    value_prefix_variance.cpu().numpy() if value_prefix_variance is not None else None
+                    value_prefix_variance.cpu().numpy() if value_prefix_variance is not None else None, \
+                    recurrent_rnd_hidden_state
+
+    def get_initial_recurrent_rnd_hidden_state(self, obs):
+        raise NotImplementedError
+
+    def get_recurrent_rnd_next_hidden_state(self, hidden_state, action):
+        raise NotImplementedError
 
     def initial_inference(self, obs) -> NetworkOutput:
         num = obs.size(0)
@@ -255,7 +278,8 @@ class BaseNet(nn.Module):
 
         if not self.training:
             # MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
-            value_variance, value_prefix_variance = self.compute_uncertainty(next_state=state, value=value)
+            value_variance, value_prefix_variance, recurrent_rnd_hidden_state = self.compute_uncertainty(
+                next_state=state, value=value, initial_observation=obs)
 
             # if not in training, obtain the scalars of the value/reward
             value = self.inverse_value_transform(value).detach().cpu().numpy()
@@ -268,21 +292,22 @@ class BaseNet(nn.Module):
             # zero initialization for reward (value prefix) hidden states
             reward_hidden = (torch.zeros(1, num, self.lstm_hidden_size).to('cuda'),
                              torch.zeros(1, num, self.lstm_hidden_size).to('cuda'))
+            recurrent_rnd_hidden_state = self.get_initial_recurrent_rnd_hidden_state(obs)
 
         return NetworkOutput(value, [0. for _ in range(num)], actor_logit, state, reward_hidden, value_variance,
-                             value_prefix_variance)
+                             value_prefix_variance, recurrent_rnd_hidden_state)
 
-    def recurrent_inference(self, hidden_state, reward_hidden, action) -> NetworkOutput:
+    def recurrent_inference(self, hidden_state, reward_hidden, action, recurrent_rnd_hidden_state=None) -> NetworkOutput:
         state, reward_hidden, value_prefix = self.dynamics(hidden_state, reward_hidden, action)
         actor_logit, value = self.prediction(state)
         value_variance, value_prefix_variance = None, None
 
         if not self.training:
             # MuExplore: Compute the variance of the value prediction, and set the variance of the value_prefix
-            value_variance, value_prefix_variance = self.compute_uncertainty(previous_state=hidden_state,
-                                                                             next_state=state,
-                                                                             action=action, value=value,
-                                                                             value_prefix=value_prefix)
+            value_variance, value_prefix_variance, recurrent_rnd_hidden_state = \
+                self.compute_uncertainty(previous_state=hidden_state, next_state=state, action=action, value=value,
+                                         value_prefix=value_prefix,
+                                         recurrent_rnd_hidden_state=recurrent_rnd_hidden_state)
 
             # if not in training, obtain the scalars of the value/reward
             value = self.inverse_value_transform(value).detach().cpu().numpy()
@@ -290,9 +315,11 @@ class BaseNet(nn.Module):
             state = state.detach().cpu().numpy()
             reward_hidden = (reward_hidden[0].detach().cpu().numpy(), reward_hidden[1].detach().cpu().numpy())
             actor_logit = actor_logit.detach().cpu().numpy()
+        else:
+            recurrent_rnd_hidden_state = self.get_recurrent_rnd_next_hidden_state(recurrent_rnd_hidden_state, action)
 
         return NetworkOutput(value, value_prefix, actor_logit, state, reward_hidden, value_variance,
-                             value_prefix_variance)
+                             value_prefix_variance, recurrent_rnd_hidden_state)
 
     def get_weights(self):
         return {k: v.cpu() for k, v in self.state_dict().items()}

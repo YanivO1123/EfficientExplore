@@ -581,13 +581,16 @@ class BaseConfig(object):
 
             if self.learned_model:
                 self.rnd_scale = 0.001
+                if 'r_rnd' in args.uncertainty_architecture_type:
+                    self.rnd_scale = 0.00005
             else:
                 self.rnd_scale = 1.0
 
 
         # MuExplore:
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
-        assert self.do_consistency or 'rnd' not in self.uncertainty_architecture_type or not self.learned_model, \
+        assert self.do_consistency or 'rnd' not in self.uncertainty_architecture_type or not self.learned_model \
+               or 'r_rnd' in self.uncertainty_architecture_type, \
             f"RND can be used as epistemic unc. measure in planning only if the model is trained with a " \
             f"consistency / reconstruction loss, or it's not learned."
         self.use_uncertainty_architecture = args.uncertainty_architecture  # Is there an active unc. arch. (rnd / ens.)

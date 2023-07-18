@@ -76,7 +76,8 @@ if __name__ == '__main__':
                              "with MuExplore AND use_max_value_targets. If not specified, "
                              "uses use_max_value_targets from the config (which defaults to false unless set otherwise)")
     parser.add_argument('--uncertainty_architecture_type', required=False,
-                        choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube', 'ube', 'none'], default='none',
+                        choices=['ensemble', 'rnd', 'rnd_ube', 'ensemble_ube', 'ube', 'none', 'r_rnd_ube'],
+                        default='none',
                         help="Decides the type of uncertainty to be used. No all are implemented for every env.")
     parser.add_argument('--use_forward_propagation', action='store_true', default=False,
                         help="Uses the state-uncertainty matrix and Jacobians to approximate the forward-propagation "

@@ -7,6 +7,7 @@ import numpy as np
 import torch.nn as nn
 
 from core.model import BaseNet
+from config.deepsea.recurrent_rnd import SimpleRRND
 
 from config.deepsea.extended_deep_sea import DeepSea
 import itertools
@@ -130,7 +131,20 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                  encoding_size=0,
                  categorical_ube=False,
                  inverse_ube_transform=None,
-                 ube_support_size=None
+                 ube_support_size=None,
+                 recurrent_rnd_state_encoding_size=None,
+                 recurrent_rnd_output_size=None,
+                 recurrent_rnd_target_network_layers=None,
+                 recurrent_rnd_encoder_layers=None,
+                 recurrent_rnd_dynamics_layers=None,
+                 recurrent_rnd_prediction_network_layers=None,
+                 recurrent_rnd_amplify_one_hot=None,
+                 recurrent_rnd_consistency_loss_coefficient=None,
+                 recurrent_rnd_dynamics_prior_coefficient=None,
+                 recurrent_rnd_representation_prior_coefficient=None,
+                 train_recurrent_rnd_encoder=None,
+                 use_recurrent_rnd_dynamics_prior=None,
+                 use_recurrent_rnd_representation_prior=None,
                  ):
         """
             FullyConnected (more precisely non-resnet) EfficientZero network. Based on the architecture of
@@ -158,7 +172,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                 Whether actions in deep_sea are randomized or not, when planning with a true model.
             uncertainty_type: string
                 Specifies the type of uncertainty architecture used. Options: 'ensemble', 'ensemble_ube', 'rnd',
-                'rnd_ube'.
+                'rnd_ube', 'r_rnd_ube'.
             discount: float
                 Used to compute the value-uncertainty-propagation scale. This scale guarantees that unseen states
                 (high uncertainty from rnd or ensemble, but low from UBE), communicate their uncertainty at the right
@@ -297,7 +311,7 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         self.projection_head = torch.nn.Identity()
 
         # RND
-        if 'rnd' in uncertainty_type:
+        if 'rnd' in uncertainty_type and 'r_rnd' not in uncertainty_type :
             self.rnd_scale = rnd_scale
             self.input_size_value_rnd = self.encoded_state_size
             self.input_size_reward_rnd = self.dynamics_input_size
@@ -311,6 +325,25 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             self.value_rnd_target_network = no_batch_norm_mlp(self.input_size_value_rnd, fc_rnd_target_layers[:-1],
                                                               fc_rnd_target_layers[-1],
                                                               init_zero=False)
+        elif 'r_rnd' in uncertainty_type:
+            self.recurrent_rnd = SimpleRRND(
+                observation_shape,
+                action_space_size,
+                recurrent_rnd_output_size,
+                recurrent_rnd_state_encoding_size,
+                recurrent_rnd_target_network_layers,
+                recurrent_rnd_encoder_layers,
+                recurrent_rnd_dynamics_layers,
+                recurrent_rnd_prediction_network_layers,
+                recurrent_rnd_amplify_one_hot,
+                recurrent_rnd_consistency_loss_coefficient,
+                recurrent_rnd_dynamics_prior_coefficient,
+                recurrent_rnd_representation_prior_coefficient,
+                train_recurrent_rnd_encoder,
+                use_dynamics_prior=use_recurrent_rnd_dynamics_prior,
+                use_representation_prior=use_recurrent_rnd_representation_prior,
+                use_prediction_prior=use_recurrent_rnd_representation_prior,
+            )
 
         if 'ube' in uncertainty_type:
             self.inverse_ube_transform = inverse_ube_transform
@@ -481,12 +514,28 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             ube_prediction = torch.exp(ube_prediction.squeeze(-1))
         return ube_prediction
 
+    def get_initial_recurrent_rnd_hidden_state(self, obs):
+        if 'r_rnd' not in self.uncertainty_type:
+            return None
+        else:
+            return self.recurrent_rnd.representation(obs)
+
+    def get_recurrent_rnd_next_hidden_state(self, hidden_state, action):
+        if 'r_rnd' not in self.uncertainty_type:
+            return None
+        else:
+            _, hidden_state_1, _, hidden_state_2 = self.recurrent_rnd.compute_rnd_predictions(action, hidden_state)
+            return (hidden_state_1, hidden_state_2)
+
     def rnd_ube_parameters(self):
         return itertools.chain(self.reward_rnd_network.parameters(), self.value_rnd_network.parameters(),
                                self.ube_network.parameters())
 
     def rnd_parameters(self):
         return itertools.chain(self.reward_rnd_network.parameters(), self.value_rnd_network.parameters())
+
+    def recurrent_rnd_parameters(self):
+        return self.recurrent_rnd.parameters()
 
     def other_parameters(self):
         return itertools.chain(self.representation_network.parameters(),

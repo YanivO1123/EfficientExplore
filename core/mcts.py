@@ -12,7 +12,8 @@ class MCTS(object):
     def __init__(self, config):
         self.config = config
 
-    def search(self, roots, model, hidden_state_roots, reward_hidden_roots, acting=False, propagating_uncertainty=False):
+    def search(self, roots, model, hidden_state_roots, reward_hidden_roots, acting=False, propagating_uncertainty=False,
+                                    recurrent_rnd_hidden_state_roots=None):
         """Do MCTS for the roots (a batch of root nodes in parallel). Parallel in model inference
         Parameters
         ----------
@@ -50,10 +51,17 @@ class MCTS(object):
             min_max_stats_lst.set_delta(self.config.value_delta_max)
             horizons = self.config.lstm_horizon_len
 
+            if 'r_rnd' in self.config.uncertainty_architecture_type and (propagating_uncertainty or acting):
+                recurrent_rnd_hidden_state_pool_1 = [recurrent_rnd_hidden_state_roots[0]]
+                recurrent_rnd_hidden_state_pool_2 = [recurrent_rnd_hidden_state_roots[1]]
+
             for index_simulation in range(self.config.num_simulations if not propagating_uncertainty else self.config.num_simulations_ube):
                 hidden_states = []
                 hidden_states_c_reward = []
                 hidden_states_h_reward = []
+                if 'r_rnd' in self.config.uncertainty_architecture_type and (propagating_uncertainty or acting):
+                    rnd_hidden_states_1 = []
+                    rnd_hidden_states_2 = []
 
                 # prepare a result wrapper to transport results between python and c++ parts
                 results = tree.ResultsWrapper(num)
@@ -70,19 +78,39 @@ class MCTS(object):
                     hidden_states.append(hidden_state_pool[ix][iy])
                     hidden_states_c_reward.append(reward_hidden_c_pool[ix][0][iy])
                     hidden_states_h_reward.append(reward_hidden_h_pool[ix][0][iy])
+                    if 'r_rnd' in self.config.uncertainty_architecture_type and (propagating_uncertainty or acting):
+                        rnd_hidden_states_1.append(recurrent_rnd_hidden_state_pool_1[ix][iy])
+                        rnd_hidden_states_2.append(recurrent_rnd_hidden_state_pool_2[ix][iy])
 
                 hidden_states = torch.from_numpy(np.asarray(hidden_states)).to(device).float()
                 hidden_states_c_reward = torch.from_numpy(np.asarray(hidden_states_c_reward)).to(device).unsqueeze(0)
                 hidden_states_h_reward = torch.from_numpy(np.asarray(hidden_states_h_reward)).to(device).unsqueeze(0)
+                if 'r_rnd' in self.config.uncertainty_architecture_type and (propagating_uncertainty or acting):
+                    rnd_hidden_states_1 = torch.from_numpy(np.asarray(rnd_hidden_states_1)).to(device).float()
+                    rnd_hidden_states_2 = torch.from_numpy(np.asarray(rnd_hidden_states_2)).to(device).float()
 
                 last_actions = torch.from_numpy(np.asarray(last_actions)).to(device).unsqueeze(1).long()
 
                 # evaluation for leaf nodes
                 if self.config.amp_type == 'torch_amp':
                     with autocast():
-                        network_output = model.recurrent_inference(hidden_states, (hidden_states_c_reward, hidden_states_h_reward), last_actions)
+                        network_output = model.recurrent_inference(hidden_states, (hidden_states_c_reward,
+                                                                                   hidden_states_h_reward),
+                                                                   last_actions,
+                                                                   recurrent_rnd_hidden_state=(rnd_hidden_states_1,
+                                                                                               rnd_hidden_states_2) if
+                                                                   'r_rnd' in self.config.uncertainty_architecture_type
+                                                                   and (propagating_uncertainty or acting) else None
+                                                                   )
                 else:
-                    network_output = model.recurrent_inference(hidden_states, (hidden_states_c_reward, hidden_states_h_reward), last_actions)
+                    network_output = model.recurrent_inference(hidden_states, (hidden_states_c_reward,
+                                                                               hidden_states_h_reward),
+                                                               last_actions,
+                                                               recurrent_rnd_hidden_state=(rnd_hidden_states_1,
+                                                                                           rnd_hidden_states_2) if
+                                                               'r_rnd' in self.config.uncertainty_architecture_type
+                                                               and (propagating_uncertainty or acting) else None
+                                                               )
 
                 hidden_state_nodes = network_output.hidden_state
                 value_prefix_pool = network_output.value_prefix.reshape(-1).tolist()
@@ -91,8 +119,13 @@ class MCTS(object):
                 reward_hidden_nodes = network_output.reward_hidden
                 value_prefix_variance_pool = network_output.value_prefix_variance.reshape(-1).tolist() if network_output.value_prefix_variance is not None else None
                 value_variance_pool = network_output.value_variance.reshape(-1).tolist() if network_output.value_variance is not None else None
+                if 'r_rnd' in self.config.uncertainty_architecture_type and (propagating_uncertainty or acting):
+                    recurrent_rnd_hidden_state_nodes = network_output.recurrent_rnd_hidden_state
 
                 hidden_state_pool.append(hidden_state_nodes)
+                if 'r_rnd' in self.config.uncertainty_architecture_type and (propagating_uncertainty or acting):
+                    recurrent_rnd_hidden_state_pool_1.append(recurrent_rnd_hidden_state_nodes[0])
+                    recurrent_rnd_hidden_state_pool_2.append(recurrent_rnd_hidden_state_nodes[1])
                 # reset 0
                 # reset the hidden states in LSTM every horizon steps in search
                 # only need to predict the value prefix in a range (eg: s0 -> s5)
@@ -300,7 +333,8 @@ class MCTS(object):
                                               min_max_stats_lst, results, is_reset_lst)
 
     def search_w_forward_propagation(self, roots, model, hidden_state_roots, reward_hidden_roots, visitation_counter: CountUncertainty,
-               initial_observation_roots, use_state_visits=False, sampling_times=0, propagating_uncertainty=False):
+               initial_observation_roots, use_state_visits=False, propagating_uncertainty=False,
+                                     recurrent_rnd_hidden_state=None):
         """Do MCTS for the roots (a batch of root nodes in parallel). Parallel in model inference
                 Parameters
                 ----------

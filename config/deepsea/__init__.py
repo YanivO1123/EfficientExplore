@@ -48,7 +48,7 @@ class DeepSeaConfig(BaseConfig):
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
-            start_transitions=300,   # 500 400 32 5000 1000
+            start_transitions=100,#300,   # 500 400 32 5000 1000
             total_transitions=50 * 1000,
             transition_num=1,
             do_consistency=False,
@@ -142,6 +142,25 @@ class DeepSeaConfig(BaseConfig):
         # This should give the policy about half the weight
         # self.pb_c_init = 0.5 # 1.25
 
+        # Recurrent-RND parameters:
+        self.do_rnd_consistency = False
+        self.recurrent_rnd_state_encoding_size = 64
+        self.recurrent_rnd_output_size = 64
+        self.recurrent_rnd_target_network_layers = [1024, 1024, 512]
+        self.recurrent_rnd_encoder_layers = [512, 512]
+        self.recurrent_rnd_dynamics_layers = [512, 512, 512]
+        self.recurrent_rnd_prediction_network_layers = [256, 256]
+        self.recurrent_rnd_amplify_one_hot = 5.0
+        self.recurrent_rnd_consistency_loss_coefficient = 0.25
+        self.recurrent_rnd_dynamics_prior_coefficient = 3.0
+        self.recurrent_rnd_representation_prior_coefficient = 5.0
+        self.train_recurrent_rnd_encoder = False
+        self.use_recurrent_rnd_dynamics_prior = True
+        self.use_recurrent_rnd_representation_prior = True
+        self.amplify_recurrent_rnd_prior_weights = 2.0
+        self.amplify_recurrent_rnd_dynamics_prior_weights = 1.5
+
+
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         # With mu explore in deep sea, we don't want to rely on random action selection
         if self.mu_explore:
@@ -210,10 +229,23 @@ class DeepSeaConfig(BaseConfig):
             categorical_ube=self.categorical_ube,
             inverse_ube_transform=self.inverse_ube_transform,
             ube_support_size=self.ube_support.size,
+            recurrent_rnd_state_encoding_size=self.recurrent_rnd_state_encoding_size,
+            recurrent_rnd_output_size=self.recurrent_rnd_output_size,
+            recurrent_rnd_target_network_layers=self.recurrent_rnd_target_network_layers,
+            recurrent_rnd_encoder_layers=self.recurrent_rnd_encoder_layers,
+            recurrent_rnd_dynamics_layers=self.recurrent_rnd_dynamics_layers,
+            recurrent_rnd_prediction_network_layers=self.recurrent_rnd_prediction_network_layers,
+            recurrent_rnd_amplify_one_hot=self.recurrent_rnd_amplify_one_hot,
+            recurrent_rnd_consistency_loss_coefficient=self.recurrent_rnd_consistency_loss_coefficient,
+            recurrent_rnd_dynamics_prior_coefficient=self.recurrent_rnd_dynamics_prior_coefficient,
+            recurrent_rnd_representation_prior_coefficient=self.recurrent_rnd_representation_prior_coefficient,
+            train_recurrent_rnd_encoder=self.train_recurrent_rnd_encoder,
+            use_recurrent_rnd_dynamics_prior=self.use_recurrent_rnd_dynamics_prior,
+            use_recurrent_rnd_representation_prior=self.use_recurrent_rnd_representation_prior,
         )
 
         with torch.no_grad():
-            if 'rnd' in self.uncertainty_architecture_type:
+            if 'rnd' in self.uncertainty_architecture_type and 'r_rnd' not in self.uncertainty_architecture_type:
                 if not self.learned_model or True:
                     model.value_rnd_network.apply(fn=init_kaiming_trunc_haiku)
                     model.value_rnd_target_network.apply(fn=init_kaiming_trunc_haiku)
@@ -248,6 +280,28 @@ class DeepSeaConfig(BaseConfig):
                 model.representation_network.apply(fn=init_kaiming_trunc_haiku)
                 for p in model.representation_network.parameters():
                     p *= 2
+            if 'r_rnd' in self.uncertainty_architecture_type:
+                if self.train_recurrent_rnd_encoder:
+                    if self.use_recurrent_rnd_representation_prior:
+                        model.recurrent_rnd.representation_prior_1.apply(fn=init_kaiming_trunc_haiku)
+                        model.recurrent_rnd.representation_prior_2.apply(fn=init_kaiming_trunc_haiku)
+                        with torch.no_grad():
+                            for p in model.recurrent_rnd.representation_prior_1.parameters():
+                                p.requires_grad = False
+                                p *= self.amplify_recurrent_rnd_prior_weights
+                            for p in model.recurrent_rnd.representation_prior_2.parameters():
+                                p.requires_grad = False
+                                p *= model.amplify_recurrent_rnd_prior_weights
+                else:
+                    model.recurrent_rnd.representation_1.apply(fn=init_kaiming_trunc_haiku)
+                    model.recurrent_rnd.representation_2.apply(fn=init_kaiming_trunc_haiku)
+                    with torch.no_grad():
+                        for p in model.recurrent_rnd.representation_1.parameters():
+                            p.requires_grad = False
+                            p *= self.amplify_recurrent_rnd_prior_weights
+                        for p in model.recurrent_rnd.representation_2.parameters():
+                            p.requires_grad = False
+                            p *= self.amplify_recurrent_rnd_prior_weights
 
         return model
 
