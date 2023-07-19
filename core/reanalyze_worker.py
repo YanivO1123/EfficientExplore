@@ -506,16 +506,24 @@ class BatchWorker_GPU(object):
             if self.config.amp_type == 'torch_amp':
                 with autocast():
                     # Compute initial inference
-                    _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(m_obs)
+                    network_output = self.model.initial_inference(m_obs)
+                    state, reward_hidden = network_output.hidden_state, network_output.reward_hidden
                     state = torch.from_numpy(np.asarray(state)).to(device).float()
                     hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
                         device)
                     hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
                         device)
+                    if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                        rnd_hidden_state = torch.from_numpy(np.asarray(network_output.rnd_hidden_state)).to(device).float()
+                        state = (state, rnd_hidden_state)
                     across_actions_ubes = []
                     # Compute recurrent inference for every possible action iteratively
                     for action in range(self.config.action_space_size):
-                        actions = torch.ones(size=(state.shape[0], 1)).to(device).long() * action
+                        if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                            minibatch_size = state[0].shape[0]
+                        else:
+                            minibatch_size = state.shape[0]
+                        actions = torch.ones(size=(minibatch_size, 1)).to(device).long() * action
                         recurrent_output_per_action = self.model.recurrent_inference(state,
                                                                                      (hidden_states_c_reward,
                                                                                       hidden_states_h_reward),
@@ -553,16 +561,24 @@ class BatchWorker_GPU(object):
                                                           f"{len(m_obs)} and expected to be the same"
             else:
                 # Compute initial inference
-                _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(m_obs)
+                network_output = self.model.initial_inference(m_obs)
+                state, reward_hidden = network_output.hidden_state, network_output.reward_hidden
                 state = torch.from_numpy(np.asarray(state)).to(device).float()
                 hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
                     device)
                 hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
                     device)
+                if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                    rnd_hidden_state = torch.from_numpy(np.asarray(network_output.rnd_hidden_state)).to(device).float()
+                    state = (state, rnd_hidden_state)
                 across_actions_ubes = []
                 # Compute recurrent inference for every possible action iteratively
                 for action in range(self.config.action_space_size):
-                    actions = torch.ones(size=(state.shape[0], 1)).to(device).long() * action
+                    if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                        minibatch_size = state[0].shape[0]
+                    else:
+                        minibatch_size = state.shape[0]
+                    actions = torch.ones(size=(minibatch_size, 1)).to(device).long() * action
                     recurrent_output_per_action = self.model.recurrent_inference(state,
                                                                                  (hidden_states_c_reward,
                                                                                   hidden_states_h_reward),
@@ -672,8 +688,8 @@ class BatchWorker_GPU(object):
 
                 # use the root values from MCTS. We propagate uncertainty instead of value and reward using a
                 # discount ** 2
-                value_variance_pool, value_prefix_variance_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_uncertainty_output(
-                    network_output_ube)
+                value_variance_pool, value_prefix_variance_pool, policy_logits_pool, hidden_state_roots, \
+                    reward_hidden_roots, rnd_hidden_states_roots = concat_uncertainty_output(network_output_ube)
                 value_prefix_variance_pool = value_prefix_variance_pool.squeeze().tolist()
                 policy_logits_pool = policy_logits_pool.tolist()
                 # To reduce cost, compute ube_targets w. MCTS trees w. budget num_simulations_ube < num_simulations
@@ -759,23 +775,33 @@ class BatchWorker_GPU(object):
                     if self.config.amp_type == 'torch_amp':
                         with autocast():
                             # Compute initial_inference for the hidden state and reward
-                            _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(rewards_uncertainty_obs)
+                            network_output = self.model.initial_inference(rewards_uncertainty_obs)
+                            state, reward_hidden = network_output.hidden_state, network_output.reward_hidden
                             state = torch.from_numpy(np.asarray(state)).to(device).float()
                             hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
                                 device)
                             hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
                                 device)
+                            if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                                rnd_hidden_state = torch.from_numpy(np.asarray(network_output.rnd_hidden_state)).to(
+                                    device).float()
+                                state = (state, rnd_hidden_state)
                             # Compute recurrent_inference for reward_rnd (or ensemble reward variance) prediction
                             r_output = self.model.recurrent_inference(state,
                                                                       (hidden_states_c_reward, hidden_states_h_reward),
                                                                       actions[beg_index:end_index])
                     else:
-                        _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(rewards_uncertainty_obs)
+                        network_output = self.model.initial_inference(rewards_uncertainty_obs)
+                        state, reward_hidden = network_output.hidden_state, network_output.reward_hidden
                         state = torch.from_numpy(np.asarray(state)).to(device).float()
                         hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
                             device)
                         hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
                             device)
+                        if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                            rnd_hidden_state = torch.from_numpy(np.asarray(network_output.rnd_hidden_state)).to(
+                                device).float()
+                            state = (state, rnd_hidden_state)
                         r_output = self.model.recurrent_inference(state,
                                                                   (hidden_states_c_reward, hidden_states_h_reward),
                                                                   actions[beg_index:end_index])
@@ -787,10 +813,12 @@ class BatchWorker_GPU(object):
 
                 # use the root values from MCTS. We propagate uncertainty instead of value and reward using a
                 # discount ** 2
-                value_variance_pool, value_prefix_variance_pool, policy_logits_pool, hidden_state_roots, reward_hidden_roots = concat_uncertainty_output(
-                    network_output_ube)
+                value_variance_pool, value_prefix_variance_pool, policy_logits_pool, hidden_state_roots, \
+                    reward_hidden_roots, rnd_hidden_state_roots = concat_uncertainty_output(network_output_ube)
                 value_prefix_variance_pool = value_prefix_variance_pool.squeeze().tolist()
                 policy_logits_pool = policy_logits_pool.tolist()
+                if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                    hidden_state_roots = (hidden_state_roots, rnd_hidden_state_roots)
                 # To reduce cost, compute ube_targets w. MCTS trees w. budget num_simulations_ube < num_simulations
                 roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations_ube)
                 noises = [
@@ -838,23 +866,33 @@ class BatchWorker_GPU(object):
                     if self.config.amp_type == 'torch_amp':
                         with autocast():
                             # Compute initial_inference for the hidden state and reward
-                            _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(rewards_uncertainty_obs)
+                            network_output = self.model.initial_inference(rewards_uncertainty_obs)
+                            state, reward_hidden = network_output.hidden_state, network_output.reward_hidden
                             state = torch.from_numpy(np.asarray(state)).to(device).float()
                             hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
                                 device)
                             hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
                                 device)
+                            if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                                rnd_hidden_state = torch.from_numpy(np.asarray(network_output.rnd_hidden_state)).to(
+                                    device).float()
+                                state = (state, rnd_hidden_state)
                             # Compute recurrent_inference for reward_rnd (or ensemble reward variance) prediction
                             r_output = self.model.recurrent_inference(state,
                                                                       (hidden_states_c_reward, hidden_states_h_reward),
                                                                       actions[beg_index:end_index])
                     else:
-                        _, _, _, state, reward_hidden, _, _ = self.model.initial_inference(rewards_uncertainty_obs)
+                        network_output = self.model.initial_inference(rewards_uncertainty_obs)
+                        state, reward_hidden = network_output.hidden_state, network_output.reward_hidden
                         state = torch.from_numpy(np.asarray(state)).to(device).float()
                         hidden_states_c_reward = torch.from_numpy(np.asarray(reward_hidden[0])).to(
                             device)
                         hidden_states_h_reward = torch.from_numpy(np.asarray(reward_hidden[1])).to(
                             device)
+                        if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                            rnd_hidden_state = torch.from_numpy(np.asarray(network_output.rnd_hidden_state)).to(
+                                device).float()
+                            state = (state, rnd_hidden_state)
                         r_output = self.model.recurrent_inference(state,
                                                                   (hidden_states_c_reward, hidden_states_h_reward),
                                                                   actions[beg_index:end_index])

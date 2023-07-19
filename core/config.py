@@ -587,7 +587,8 @@ class BaseConfig(object):
 
         # MuExplore:
         self.uncertainty_architecture_type = args.uncertainty_architecture_type
-        assert self.do_consistency or 'rnd' not in self.uncertainty_architecture_type or not self.learned_model, \
+        assert self.do_consistency or 'rnd' not in self.uncertainty_architecture_type or not self.learned_model or \
+               'double_model_rnd' in self.uncertainty_architecture_type, \
             f"RND can be used as epistemic unc. measure in planning only if the model is trained with a " \
             f"consistency / reconstruction loss, or it's not learned."
         self.use_uncertainty_architecture = args.uncertainty_architecture  # Is there an active unc. arch. (rnd / ens.)

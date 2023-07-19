@@ -367,6 +367,9 @@ class DataWorker(object):
                             roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_pool,
                                           policy_logits_pool)
 
+                        if 'double_model_rnd' in self.config.uncertainty_architecture_type:
+                            hidden_state_roots = (hidden_state_roots, network_output.rnd_hidden_state)
+
                         # do MCTS for a policy
                         if self.config.use_forward_propagation:
                             MCTS(self.config).search_w_forward_propagation(roots, model, hidden_state_roots,
@@ -478,13 +481,15 @@ class DataWorker(object):
                                             f"{self.visitation_counter.s_counts - previous_visitation_counts}"
                                             , flush=True)
                                         previous_visitation_counts = copy.deepcopy(self.visitation_counter.s_counts)
-                                        if self.config.mu_explore:
+                                        if self.config.mu_explore and False:
                                             if self.config.learned_model and not self.config.use_encoder and \
                                                     ('identity' in self.config.representation_type
                                                     or 'concatted' in self.config.representation_type) and \
                                                     self.config.do_consistency:
                                                 self.debug_state_prediction(model, total_transitions)
-                                            if 'deep_sea' in self.config.env_name and not self.config.plan_with_visitation_counter:
+                                            if 'deep_sea' in self.config.env_name and not \
+                                                    self.config.plan_with_visitation_counter and 'double_model_rnd' not in \
+                                                    self.config.uncertainty_architecture_type:
                                                 self.debug_deep_sea(model)
                                 if self.config.mu_explore and total_transitions > 0:
                                     root_values_uncertainties = roots.get_values_uncertainty()
@@ -546,7 +551,8 @@ class DataWorker(object):
 
                             if 'deep_sea' in self.config.env_name and self.config.evaluate_uncertainty and \
                                     total_transitions in self.config.evaluate_uncertainty_at and \
-                                    self.config.use_deep_exploration and not self.config.plan_with_visitation_counter:
+                                    self.config.use_deep_exploration and not self.config.plan_with_visitation_counter \
+                                    and 'double_model_rnd' not in self.config.uncertainty_architecture_type:
                                 try:
                                     self.evaluate_uncertainty(model=model, step_count=total_transitions)
                                 except:
@@ -671,7 +677,7 @@ class DataWorker(object):
                 assert observations_roots_for_counter is not None, f"observations_roots_for_counter must not be None" \
                                                                    f"for counter based local uncertainty"
                 reward_uncertainties_from_counter = self.visitation_counter.get_reward_uncertainty(
-                    observations_roots_for_counter, np_actions, use_state_visits=self.config.plan_with_state_visits).squeeze(-1)
+                    observations_roots_for_counter, np_actions, use_state_visits=self.config.plan_with_state_visits).reshape(-1)
                 assert np.shape(reward_uncertainties_from_counter) == np.shape(network_output.value_variance), \
                     f"np.shape(reward_uncertainties_from_counter) = {np.shape(reward_uncertainties_from_counter)} ," \
                     f"np.shape(network_output.value_variance) = {np.shape(network_output.value_variance)} " \

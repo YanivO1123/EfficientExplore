@@ -297,7 +297,28 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         self.projection_head = torch.nn.Identity()
 
         # RND
-        if 'rnd' in uncertainty_type:
+        if 'double_model_rnd' in uncertainty_type:
+            # The double model:
+            self.rnd_encoded_state_size = self.env_size * 2
+            self.rnd_dynamics_input_size = self.rnd_encoded_state_size + action_space_size
+            self.rnd_dynamics_net = no_batch_norm_mlp(self.rnd_dynamics_input_size, fc_state_prediction_layers,
+                                                              self.rnd_encoded_state_size, init_zero=init_zero)
+
+            # The RND arch:
+            self.rnd_scale = rnd_scale
+            self.input_size_value_rnd = self.rnd_encoded_state_size
+            self.input_size_reward_rnd = self.rnd_dynamics_input_size
+            # It's important that the RND nets are NOT initiated with zero
+            self.reward_rnd_network = no_batch_norm_mlp(self.input_size_reward_rnd, fc_rnd_layers[:-1],
+                                                        fc_rnd_layers[-1], init_zero=False)
+            self.reward_rnd_target_network = no_batch_norm_mlp(self.input_size_reward_rnd, fc_rnd_target_layers[:-1],
+                                                               fc_rnd_target_layers[-1], init_zero=False)
+            self.value_rnd_network = no_batch_norm_mlp(self.input_size_value_rnd, fc_rnd_layers[:-1], fc_rnd_layers[-1],
+                                                       init_zero=False)
+            self.value_rnd_target_network = no_batch_norm_mlp(self.input_size_value_rnd, fc_rnd_target_layers[:-1],
+                                                              fc_rnd_target_layers[-1],
+                                                              init_zero=False)
+        elif 'rnd' in uncertainty_type:
             self.rnd_scale = rnd_scale
             self.input_size_value_rnd = self.encoded_state_size
             self.input_size_reward_rnd = self.dynamics_input_size
@@ -326,6 +347,34 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                 # We don't initialize ube with zeros because we don't want to penalize the uncertainty of unobserved states
                 self.ube_network = no_batch_norm_mlp(self.encoded_state_size, fc_ube_layers, 1,
                                                      init_zero=init_zero)  # , momentum=momentum)
+
+    def rnd_representation(self, observation):
+        """
+            When we learn two separate models, one reconstructed for RND and one abstracted for MuZero (all the other
+            predictions), the RND representation (for deep sea) is the concatted representation (instead of (N,N) 1 hot,
+            a two-hot (N + N) representation of row concatted with column.
+        """
+        observation = observation[:, -1:, :, :]
+        device = observation.device
+        N = self.env_size
+        B = observation.shape[0]
+        flattened_observation = observation.reshape(B, -1)
+        mask = flattened_observation.sum(-1) == 0  # To identify zero-observations
+        zeros_one_hot = torch.zeros(2 * N).to(device)
+
+        # Get the indexes of the 1 hot along the B dimension, and shape them to 1 dim vectors of size batch_size
+        rows = (flattened_observation.argmax(dim=-1) // N).long().reshape(B).to(device)
+        columns = (flattened_observation.argmax(dim=-1) % N).long().reshape(B).to(device)
+        one_hot_rows = torch.nn.functional.one_hot(rows, N).to(device)
+        one_hot_cols = torch.nn.functional.one_hot(columns, N).to(device)
+
+        # Setup the state tensor of shape [..., 2 * N]
+        encoded_state = torch.cat((one_hot_rows[..., :N], one_hot_cols[..., :N]), dim=-1).float().to(device)
+        # Setup all empty-state tensors to a zeros tensor of the right shape
+        encoded_state[mask] = zeros_one_hot
+        # Multiply by a constant to make it easy for MSE
+        encoded_state = encoded_state * self.amplify_one_hot
+        return encoded_state
 
     def representation(self, observation):
         # Regardless of the number of stacked observations, we only pass the last
@@ -405,6 +454,25 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         next_encoded_state, reward_hidden, value_prefix = self.dynamics_network(reward_hidden, encoded_state, action)
         return next_encoded_state, reward_hidden, value_prefix
 
+    def rnd_dynamics(self, encoded_state, action):
+        batch_size = encoded_state.shape[0]
+        action_space_size = self.action_space_size
+        action_one_hot = (
+            torch.zeros(
+                size=(
+                    batch_size,  # batch dimension
+                    action_space_size  # action space size
+                )
+            )
+            .to(action.device)
+            .float()
+        )
+        action_one_hot.scatter_(1, action.long(), 1.0)
+        flattened_state = encoded_state.reshape(batch_size, -1)
+        x = torch.cat((flattened_state, action_one_hot), dim=-1)
+        next_encoded_state = self.rnd_dynamics_net(x)
+        return next_encoded_state
+
     def get_params_mean(self):
         if 'learned' in self.representation_type:
             representation_mean = []
@@ -454,7 +522,8 @@ class FullyConnectedEfficientExploreNet(BaseNet):
             .float()
         )
         action_one_hot.scatter_(1, action.long(), 1.0)
-        if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type):
+        if self.learned_model and ('concatted' in self.representation_type or 'identity' in self.representation_type or
+                                   'double_model_rnd' in self.uncertainty_type):
             action_one_hot = action_one_hot * self.amplify_one_hot
 
         state_action = torch.cat((flattened_state, action_one_hot), dim=1).detach()
@@ -486,7 +555,15 @@ class FullyConnectedEfficientExploreNet(BaseNet):
                                self.ube_network.parameters())
 
     def rnd_parameters(self):
-        return itertools.chain(self.reward_rnd_network.parameters(), self.value_rnd_network.parameters())
+        if 'double_model_rnd' in self.uncertainty_type:
+            return itertools.chain(self.reward_rnd_network.parameters(),
+                                   self.value_rnd_network.parameters(),
+                                   self.rnd_dynamics_net.parameters(),
+                                   )
+        else:
+            return itertools.chain(self.reward_rnd_network.parameters(),
+                                   self.value_rnd_network.parameters()
+                                   )
 
     def other_parameters(self):
         return itertools.chain(self.representation_network.parameters(),

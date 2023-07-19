@@ -37,6 +37,11 @@ class MCTS(object):
             num_exploratory = self.config.number_of_exploratory_envs
             device = self.config.device
             pb_c_base, pb_c_init, discount = self.config.pb_c_base, self.config.pb_c_init, 1 #self.config.discount
+
+            if 'double_model_rnd' in self.config.uncertainty_architecture_type and (propagating_uncertainty or acting):
+                rnd_hidden_state_pool = [hidden_state_roots[1]]
+                hidden_state_roots = hidden_state_roots[0]
+
             # the data storage of hidden states: storing the states of all the tree nodes
             hidden_state_pool = [hidden_state_roots]
             # 1 x batch x 64
@@ -54,6 +59,8 @@ class MCTS(object):
                 hidden_states = []
                 hidden_states_c_reward = []
                 hidden_states_h_reward = []
+                if 'double_model_rnd' in self.config.uncertainty_architecture_type and (propagating_uncertainty or acting):
+                    rnd_hidden_states = []
 
                 # prepare a result wrapper to transport results between python and c++ parts
                 results = tree.ResultsWrapper(num)
@@ -70,10 +77,16 @@ class MCTS(object):
                     hidden_states.append(hidden_state_pool[ix][iy])
                     hidden_states_c_reward.append(reward_hidden_c_pool[ix][0][iy])
                     hidden_states_h_reward.append(reward_hidden_h_pool[ix][0][iy])
+                    if 'double_model_rnd' in self.config.uncertainty_architecture_type and (propagating_uncertainty or acting):
+                        rnd_hidden_states.append(rnd_hidden_state_pool[ix][iy])
 
                 hidden_states = torch.from_numpy(np.asarray(hidden_states)).to(device).float()
                 hidden_states_c_reward = torch.from_numpy(np.asarray(hidden_states_c_reward)).to(device).unsqueeze(0)
                 hidden_states_h_reward = torch.from_numpy(np.asarray(hidden_states_h_reward)).to(device).unsqueeze(0)
+                if 'double_model_rnd' in self.config.uncertainty_architecture_type and (
+                        propagating_uncertainty or acting):
+                    rnd_hidden_states = torch.from_numpy(np.asarray(rnd_hidden_states)).to(device).float()
+                    hidden_states = (hidden_states, rnd_hidden_states)
 
                 last_actions = torch.from_numpy(np.asarray(last_actions)).to(device).unsqueeze(1).long()
 
@@ -93,6 +106,9 @@ class MCTS(object):
                 value_variance_pool = network_output.value_variance.reshape(-1).tolist() if network_output.value_variance is not None else None
 
                 hidden_state_pool.append(hidden_state_nodes)
+                if 'double_model_rnd' in self.config.uncertainty_architecture_type and (
+                        propagating_uncertainty or acting):
+                    rnd_hidden_state_pool.append(network_output.rnd_hidden_state)
                 # reset 0
                 # reset the hidden states in LSTM every horizon steps in search
                 # only need to predict the value prefix in a range (eg: s0 -> s5)

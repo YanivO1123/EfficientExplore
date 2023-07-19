@@ -54,6 +54,17 @@ def adjust_lr(config, optimizer, step_count):
     return lr
 
 
+def rnd_dynamics_model_loss(prediction_state, target_state, mask, running_loss_coefficient, one_step_loss_coefficient,
+                            one_step_predicted_state=None):
+    temp_loss = running_loss_coefficient * deep_sea_consistency_loss(prediction_state, target_state.detach()) * mask
+
+    if one_step_predicted_state is not None:
+        temp_loss += one_step_loss_coefficient * deep_sea_consistency_loss(one_step_predicted_state, target_state.detach()) \
+                     * mask
+
+    return temp_loss
+
+
 def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_result=False, step_count=None):
     """update models given a batch data
     Parameters
@@ -152,9 +163,15 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
 
     if config.amp_type == 'torch_amp':
         with autocast():
-            value, _, policy_logits, hidden_state, reward_hidden, value_variance, _ = model.initial_inference(obs_batch)
+            initial_inference_output = model.initial_inference(obs_batch)
+            value, policy_logits, hidden_state, reward_hidden, value_variance = initial_inference_output.value, \
+                initial_inference_output.policy_logits, initial_inference_output.hidden_state, \
+                initial_inference_output.reward_hidden, initial_inference_output.value_variance
     else:
-        value, _, policy_logits, hidden_state, reward_hidden, value_variance, _ = model.initial_inference(obs_batch)
+        initial_inference_output = model.initial_inference(obs_batch)
+        value, policy_logits, hidden_state, reward_hidden, value_variance = initial_inference_output.value, \
+            initial_inference_output.policy_logits, initial_inference_output.hidden_state, \
+            initial_inference_output.reward_hidden, initial_inference_output.value_variance
     scaled_value = config.inverse_value_transform(value)
 
     if vis_result:
@@ -186,8 +203,12 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
         one_step_loss_coeff = config.one_step_loss_coeff  # Relative loss factor for one-step consistency loss in deep_sea
 
     # value RND loss:
-    if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
-        rnd_loss = get_rnd_loss(model, hidden_state, batch_size, config.device)
+    if 'double_model_rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
+        rnd_hidden_state = initial_inference_output.rnd_hidden_state
+        rnd_loss = get_rnd_loss(model, rnd_hidden_state)
+        previous_state = rnd_hidden_state
+    elif 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
+        rnd_loss = get_rnd_loss(model, hidden_state)
         previous_state = hidden_state
     else:
         rnd_loss = torch.zeros(batch_size, device=config.device)
@@ -211,20 +232,25 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
         # use torch amp
         with autocast():
             for step_i in range(config.num_unroll_steps):
+                if 'double_model_rnd' in config.uncertainty_architecture_type:
+                    hidden_state = (hidden_state, rnd_hidden_state)
                 # unroll with the dynamics function
-                value, value_prefix, policy_logits, hidden_state, reward_hidden, _, _ = model.recurrent_inference(
-                    hidden_state, reward_hidden, action_batch[:, step_i])
+                recurrent_inference_output = model.recurrent_inference(hidden_state, reward_hidden,
+                                                                       action_batch[:, step_i])
+                value, value_prefix, policy_logits, hidden_state, reward_hidden = recurrent_inference_output.value, \
+                    recurrent_inference_output.value_prefix, recurrent_inference_output.policy_logits, \
+                    recurrent_inference_output.hidden_state, recurrent_inference_output.reward_hidden
 
                 beg_index = config.image_channel * step_i
                 end_index = config.image_channel * (step_i + config.stacked_observations)
                 presentation_state = None
 
                 # consistency loss
-                if config.consistency_coeff > 0:
-                    # obtain the oracle hidden states from representation function
-                    _, _, _, presentation_state, _, _, _ = model.initial_inference(
-                        obs_target_batch[:, beg_index:end_index, :, :])
+                if config.consistency_coeff > 0 or 'double_model_rnd' in config.uncertainty_architecture_type:
+                    running_initial_inference = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
+                    presentation_state = running_initial_inference.hidden_state
 
+                if config.consistency_coeff > 0:
                     # In deep sea, we use MSE between the true state and the learned state
                     if 'deep_sea' in config.env_name:
                         flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
@@ -284,16 +310,31 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                     consistency_loss += temp_loss
 
-                if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
-                    action = action_batch[:, step_i]
+                if 'double_model_rnd' in config.uncertainty_architecture_type:
+                    current_state = running_initial_inference.rnd_hidden_state
+                    rnd_hidden_state = recurrent_inference_output.rnd_hidden_state
+
+                    # Train the rnd dynamics model
+                    rnd_model_loss = running_loss_coeff * deep_sea_consistency_loss(rnd_hidden_state,
+                                                                                    current_state.detach()) \
+                                     * mask_batch[:, step_i]
+                    if step_i > 0 and config.use_one_step_losses:
+                        one_step_rnd_hidden_state = model.rnd_dynamics(previous_state.detach(), action_batch[:, step_i])
+                        rnd_model_loss += one_step_loss_coeff * deep_sea_consistency_loss(one_step_rnd_hidden_state,
+                                                                                     current_state.detach()) \
+                                          * mask_batch[:, step_i]
+                    rnd_loss += rnd_model_loss
+
+                    # Train the RND
+                    rnd_loss += get_rnd_loss(model, current_state, previous_state, action_batch[:, step_i]) * mask_batch[:, step_i]
+                    previous_state = current_state
+                elif 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                     # Compute value RND loss
-                    if presentation_state is not None:
+                    if 'learned' not in config.representation_type:
                         current_state = presentation_state
                     else:
                         current_state = obs_target_batch[:, beg_index:end_index, :, :]
-                    rnd_loss += get_rnd_loss(model, current_state, batch_size, config.device,
-                                             previous_state, action) \
-                                * mask_batch[:, step_i]
+                    rnd_loss += get_rnd_loss(model, current_state, previous_state, action_batch[:, step_i]) * mask_batch[:, step_i]
                     previous_state = current_state
 
                 if 'ube' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
@@ -347,19 +388,25 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
     else:
         for step_i in range(config.num_unroll_steps):
             # unroll with the dynamics function
-            value, value_prefix, policy_logits, hidden_state, reward_hidden, _, _ = model.recurrent_inference(
-                hidden_state, reward_hidden, action_batch[:, step_i])
+            if 'double_model_rnd' in config.uncertainty_architecture_type:
+                hidden_state = (hidden_state, rnd_hidden_state)
+            recurrent_inference_output = model.recurrent_inference(hidden_state, reward_hidden,
+                                                                   action_batch[:, step_i])
+            value, value_prefix, policy_logits, hidden_state, reward_hidden = recurrent_inference_output.value, \
+                recurrent_inference_output.value_prefix, recurrent_inference_output.policy_logits, \
+                recurrent_inference_output.hidden_state, recurrent_inference_output.reward_hidden
 
             beg_index = config.image_channel * step_i
             end_index = config.image_channel * (step_i + config.stacked_observations)
             presentation_state = None
 
             # consistency loss
-            if config.consistency_coeff > 0:
-                # obtain the oracle hidden states from representation function
-                _, _, _, presentation_state, _, _, _ = model.initial_inference(
-                    obs_target_batch[:, beg_index:end_index, :, :])
+            if config.consistency_coeff > 0 or 'double_model_rnd' in config.uncertainty_architecture_type:
+                running_initial_inference = model.initial_inference(obs_target_batch[:, beg_index:end_index, :, :])
+                presentation_state = running_initial_inference.hidden_state
 
+            # consistency loss
+            if config.consistency_coeff > 0:
                 # In deep sea, we use MSE between the true state and the learned state
                 if 'deep_sea' in config.env_name:
                     flattened_hidden_state = hidden_state.reshape(hidden_state.shape[0], -1)
@@ -418,15 +465,31 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 other_loss['consist_' + str(step_i + 1)] = temp_loss.mean().item()
                 consistency_loss += temp_loss
 
-            if 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
-                action = action_batch[:, step_i]
+            if 'double_model_rnd' in config.uncertainty_architecture_type:
+                current_state = running_initial_inference.rnd_hidden_state
+                rnd_hidden_state = recurrent_inference_output.rnd_hidden_state
+
+                # Train the rnd dynamics model
+                rnd_model_loss = running_loss_coeff * deep_sea_consistency_loss(rnd_hidden_state,
+                                                                                current_state.detach()) \
+                                 * mask_batch[:, step_i]
+                if step_i > 0 and config.use_one_step_losses:
+                    one_step_rnd_hidden_state = model.rnd_dynamics(previous_state.detach(), action_batch[:, step_i])
+                    rnd_model_loss += one_step_loss_coeff * deep_sea_consistency_loss(one_step_rnd_hidden_state,
+                                                                                      current_state.detach()) \
+                                      * mask_batch[:, step_i]
+                rnd_loss += rnd_model_loss
+
+                # Train the RND
+                rnd_loss += get_rnd_loss(model, current_state, previous_state, action_batch[:, step_i]) * mask_batch[:, step_i]
+                previous_state = current_state
+            elif 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                 # Compute value RND loss
-                if presentation_state is not None:
+                if ('identity' in config.representation_type or 'concatted' in config.representation_type) and presentation_state is not None:
                     current_state = presentation_state
                 else:
                     current_state = obs_target_batch[:, beg_index:end_index, :, :]
-                rnd_loss += get_rnd_loss(model, current_state, batch_size, config.device,
-                                         previous_state, action) \
+                rnd_loss += get_rnd_loss(model, current_state, previous_state, action_batch[:, step_i]) \
                             * mask_batch[:, step_i]
                 previous_state = current_state
 
@@ -873,7 +936,7 @@ def debug_train_deep_sea(observations_batch, values_targets_batch, policy_target
               f"action: {action_batch[i, j - 1] if j > 0 else 1}")
 
 
-def get_rnd_loss(model, next_state, batch_size, device, previous_state=None, action=None):
+def get_rnd_loss(model, next_state, previous_state=None, action=None):
     """
         To compute the rnd error for value, we take the next-state prediction for previous-state and action.
         To compute the rnd error for reward, we take the previous-state and action.
@@ -999,7 +1062,14 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                         actions_left = torch.zeros(size=(num_columns, 1)).to(device).long()
                         actions_right = torch.ones(size=(num_columns, 1)).to(device).long()
 
-                        if 'rnd' in config.uncertainty_architecture_type:
+                        if 'double_model_rnd' in config.uncertainty_architecture_type:
+                            rnd_hidden_states = torch.from_numpy(network_output_init.rnd_hidden_state).float().to(
+                                device)
+                            hidden_states = (hidden_states, rnd_hidden_states)
+                            value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
+                            reward_rnds_left = model.compute_reward_rnd_uncertainty(rnd_hidden_states, actions_left)
+                            reward_rnds_right = model.compute_reward_rnd_uncertainty(rnd_hidden_states, actions_right)
+                        elif 'rnd' in config.uncertainty_architecture_type:
                             value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
                         if 'ube' in config.uncertainty_architecture_type:
                             ube_predictions = model.compute_ube_uncertainty(hidden_states)
@@ -1027,7 +1097,12 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                     actions_left = torch.zeros(size=(num_columns, 1)).to(device).long()
                     actions_right = torch.ones(size=(num_columns, 1)).to(device).long()
 
-                    if 'rnd' in config.uncertainty_architecture_type:
+                    if 'double_model_rnd' in config.uncertainty_architecture_type:
+                        rnd_hidden_states = torch.from_numpy(network_output_init.rnd_hidden_state).float().to(device)
+                        value_rnds = model.compute_value_rnd_uncertainty(rnd_hidden_states)
+                        reward_rnds_left = model.compute_reward_rnd_uncertainty(rnd_hidden_states, actions_left)
+                        reward_rnds_right = model.compute_reward_rnd_uncertainty(rnd_hidden_states, actions_right)
+                    elif 'rnd' in config.uncertainty_architecture_type:
                         value_rnds = model.compute_value_rnd_uncertainty(hidden_states)
                         reward_rnds_left = model.compute_reward_rnd_uncertainty(hidden_states, actions_left)
                         reward_rnds_right = model.compute_reward_rnd_uncertainty(hidden_states, actions_right)
@@ -1035,6 +1110,8 @@ def debug_uncertainty(model, config, training_step, device, visit_counter, batch
                         ube_predictions = model.compute_ube_uncertainty(hidden_states)
                         if config.categorical_ube:
                             ube_predictions = config.inverse_ube_transform(ube_predictions).squeeze().abs()
+                    if 'double_model_rnd' in config.uncertainty_architecture_type:
+                        hidden_states = (hidden_states, rnd_hidden_states)
 
                     network_output_recur_left = model.recurrent_inference(hidden_states,
                                                                           (hidden_states_c_reward,
@@ -1156,6 +1233,14 @@ def debug_unrolled_uncertainty(config, visitation_counter, model, training_step)
         hidden_reward_c_r = torch.from_numpy(network_output_init.reward_hidden[0]).float().to(device)
         hidden_reward_h_r = torch.from_numpy(network_output_init.reward_hidden[1]).float().to(device)
 
+        if 'double_model_rnd' in config.uncertainty_architecture_type:
+            rnd_hidden_states_l = torch.from_numpy(network_output_init.rnd_hidden_state).float().to(
+                device)
+            rnd_hidden_states_r = torch.from_numpy(network_output_init.rnd_hidden_state).float().to(
+                device)
+            hidden_states_l = (hidden_states_l, rnd_hidden_states_l)
+            hidden_states_r = (hidden_states_r, rnd_hidden_states_r)
+
         # network_outputs_left.append(network_output_init)
         # network_outputs_right.append(network_output_init)
 
@@ -1179,6 +1264,14 @@ def debug_unrolled_uncertainty(config, visitation_counter, model, training_step)
             hidden_states_r = torch.from_numpy(network_output_recur_right.hidden_state).float().to(device)
             hidden_reward_c_r = torch.from_numpy(network_output_recur_right.reward_hidden[0]).float().to(device)
             hidden_reward_h_r = torch.from_numpy(network_output_recur_right.reward_hidden[1]).float().to(device)
+
+            if 'double_model_rnd' in config.uncertainty_architecture_type:
+                rnd_hidden_states_l = torch.from_numpy(network_output_recur_left.rnd_hidden_state).float().to(
+                    device)
+                rnd_hidden_states_r = torch.from_numpy(network_output_recur_right.rnd_hidden_state).float().to(
+                    device)
+                hidden_states_l = (hidden_states_l, rnd_hidden_states_l)
+                hidden_states_r = (hidden_states_r, rnd_hidden_states_r)
 
         # Evaluate results
         reward_unc_left = []
