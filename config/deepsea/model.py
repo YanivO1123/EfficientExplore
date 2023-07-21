@@ -470,7 +470,10 @@ class FullyConnectedEfficientExploreNet(BaseNet):
         action_one_hot.scatter_(1, action.long(), 1.0)
         flattened_state = encoded_state.reshape(batch_size, -1)
         x = torch.cat((flattened_state, action_one_hot), dim=-1)
-        next_encoded_state = self.rnd_dynamics_net(x)
+        next_encoded_state = self.rnd_dynamics_net(x) * self.amplify_one_hot
+        # if not self.training:
+        #     next_encoded_state[next_encoded_state > self.amplify_one_hot / 2] = self.amplify_one_hot
+        #     next_encoded_state[next_encoded_state < self.amplify_one_hot / 2] = 0
         return next_encoded_state
 
     def get_params_mean(self):

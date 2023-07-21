@@ -605,7 +605,6 @@ class BatchWorker_GPU(object):
 
                         # Sum the reward + gamma ** 2 value uncertainty for each action
                         local_ube = rewards_uncertainties_per_action + next_state_ube * self.config.discount ** 2
-
                     else:
                         # Sum the reward + gamma ** 2 value uncertainty for each action
                         local_ube = recurrent_output_per_action.value_prefix_variance + \

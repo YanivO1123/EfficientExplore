@@ -315,14 +315,19 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                     rnd_hidden_state = recurrent_inference_output.rnd_hidden_state
 
                     # Train the rnd dynamics model
-                    rnd_model_loss = running_loss_coeff * deep_sea_consistency_loss(rnd_hidden_state,
-                                                                                    current_state.detach()) \
-                                     * mask_batch[:, step_i]
-                    if step_i > 0 and config.use_one_step_losses:
-                        one_step_rnd_hidden_state = model.rnd_dynamics(previous_state.detach(), action_batch[:, step_i])
-                        rnd_model_loss += one_step_loss_coeff * deep_sea_consistency_loss(one_step_rnd_hidden_state,
-                                                                                     current_state.detach()) \
-                                          * mask_batch[:, step_i]
+                    if step_i > 0:
+                        rnd_model_loss = running_loss_coeff * deep_sea_consistency_loss(rnd_hidden_state,
+                                                                                        current_state.detach()) \
+                                         * mask_batch[:, step_i]
+                        if config.use_one_step_losses:
+                            one_step_rnd_hidden_state = model.rnd_dynamics(previous_state.detach(), action_batch[:, step_i])
+                            rnd_model_loss += one_step_loss_coeff * deep_sea_consistency_loss(one_step_rnd_hidden_state,
+                                                                                         current_state.detach()) \
+                                              * mask_batch[:, step_i]
+                    else:
+                        rnd_model_loss = one_step_loss_coeff * deep_sea_consistency_loss(rnd_hidden_state,
+                                                                                        current_state.detach()) \
+                                         * mask_batch[:, step_i]
                     rnd_loss += rnd_model_loss
 
                     # Train the RND
@@ -470,18 +475,24 @@ def update_weights(model, batch, optimizer, replay_buffer, config, scaler, vis_r
                 rnd_hidden_state = recurrent_inference_output.rnd_hidden_state
 
                 # Train the rnd dynamics model
-                rnd_model_loss = running_loss_coeff * deep_sea_consistency_loss(rnd_hidden_state,
-                                                                                current_state.detach()) \
-                                 * mask_batch[:, step_i]
-                if step_i > 0 and config.use_one_step_losses:
-                    one_step_rnd_hidden_state = model.rnd_dynamics(previous_state.detach(), action_batch[:, step_i])
-                    rnd_model_loss += one_step_loss_coeff * deep_sea_consistency_loss(one_step_rnd_hidden_state,
-                                                                                      current_state.detach()) \
-                                      * mask_batch[:, step_i]
+                if step_i > 0:
+                    rnd_model_loss = running_loss_coeff * deep_sea_consistency_loss(rnd_hidden_state,
+                                                                                    current_state.detach()) \
+                                     * mask_batch[:, step_i]
+                    if config.use_one_step_losses:
+                        one_step_rnd_hidden_state = model.rnd_dynamics(previous_state.detach(), action_batch[:, step_i])
+                        rnd_model_loss += one_step_loss_coeff * deep_sea_consistency_loss(one_step_rnd_hidden_state,
+                                                                                          current_state.detach()) \
+                                          * mask_batch[:, step_i]
+                else:
+                    rnd_model_loss = one_step_loss_coeff * deep_sea_consistency_loss(rnd_hidden_state,
+                                                                                     current_state.detach()) \
+                                     * mask_batch[:, step_i]
                 rnd_loss += rnd_model_loss
 
                 # Train the RND
-                rnd_loss += get_rnd_loss(model, current_state, previous_state, action_batch[:, step_i]) * mask_batch[:, step_i]
+                rnd_loss += get_rnd_loss(model, current_state, previous_state, action_batch[:, step_i]) * mask_batch[:,
+                                                                                                          step_i]
                 previous_state = current_state
             elif 'rnd' in config.uncertainty_architecture_type and config.use_uncertainty_architecture:
                 # Compute value RND loss
