@@ -21,6 +21,7 @@ def _test(config, shared_storage):
 
     mean_test_results_list = []
     training_steps_list = []
+    true_returns_list = [] # only for deep sea
 
     while True:
         counter = ray.get(shared_storage.get_counter.remote())
@@ -34,7 +35,7 @@ def _test(config, shared_storage):
             test_model.set_weights(ray.get(shared_storage.get_weights.remote()))
             test_model.eval()
 
-            test_score, eval_steps, _ = test(config, test_model, counter, config.test_episodes, config.device, False, save_video=False)
+            test_score, eval_steps, _, deep_sea_true_mean_returns = test(config, test_model, counter, config.test_episodes, config.device, False, save_video=False)
             mean_score = test_score.mean()
             std_score = test_score.std()
             print('Start evaluation at step {}.'.format(counter))
@@ -54,9 +55,13 @@ def _test(config, shared_storage):
 
             mean_test_results_list.append(mean_score)
             training_steps_list.append(counter)
+            true_returns_list.append(deep_sea_true_mean_returns)
+            if config.stochastic_reward and 'deep_sea' in config.env_name:
+                print('And true mean return (found goal) = {}.'.format(deep_sea_true_mean_returns))
 
         np.save(config.exp_path + "/mean_test_results", np.asarray(mean_test_results_list))
         np.save(config.exp_path + "/training_steps", np.asarray(training_steps_list))
+        np.save(config.exp_path + "/true_test_returns", np.asarray(true_returns_list))
 
         time.sleep(30)
 
@@ -171,7 +176,12 @@ def test(config, model, counter, test_episodes, device, render, save_video=False
                 pb.update(1)
 
         print(f"In function Test, finished testing for {test_episodes} episodes. counter = {counter}")
+        if 'deep_sea' in config.env_name and config.stochastic_reward:
+            mean_true_episodic_returns = np.asarray([env.get_true_return() for env in envs]).mean()
+        else:
+            mean_true_episodic_returns = None
+
         for env in envs:
             env.close()
 
-    return ep_ori_rewards, step, save_path
+    return ep_ori_rewards, step, save_path, mean_true_episodic_returns

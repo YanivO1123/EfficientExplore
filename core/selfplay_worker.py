@@ -132,6 +132,8 @@ class DataWorker(object):
                                                        randomize_actions=self.config.deepsea_randomize_actions)
             previous_visitation_counts = np.zeros(shape=(self.config.env_size, self.config.env_size))
             print(f"Initiated visitation counter", flush=True)
+        else:
+            self.visitation_counter = None
         unique_states_visited_so_far = []
         unique_state_action_pairs_visited_so_far = []
         transitions_so_far = []
@@ -449,16 +451,17 @@ class DataWorker(object):
                                                                       deterministic=deterministic)
 
                             # MuExplore: Add state-action to visitation counter
-                            if self.config.use_visitation_counter and \
-                                    (i >= exploit_env_nums or not self.config.use_deep_exploration):
+                            if self.config.use_visitation_counter and self.visitation_counter is not None:# \
+                                    # and (i >= exploit_env_nums or not self.config.use_deep_exploration):
                                 # Take the last observation that was stored, and the current action
                                 self.visitation_counter.observe(game_histories[i].obs_history[-1], action)
 
                             obs, ori_reward, done, info = env.step(action)
 
                             if ori_reward > 0 and 'deep_sea' in self.config.env_name:
-                                ori_reward = ori_reward * 10
-                                if self.config.use_visitation_counter and self.visitation_counter is not None:
+                                ori_reward = ori_reward * 1
+                                if self.config.use_visitation_counter and self.visitation_counter is not None and \
+                                        not self.config.stochastic_reward:
                                     print(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$"
                                           f"$$$$$$$$$$$$$$$$ \n"
                                           f"Encountered reward: {ori_reward}. Env index is :{i}. "
@@ -551,7 +554,7 @@ class DataWorker(object):
 
                             if 'deep_sea' in self.config.env_name and self.config.evaluate_uncertainty and \
                                     total_transitions in self.config.evaluate_uncertainty_at and \
-                                    self.config.use_deep_exploration and not self.config.plan_with_visitation_counter \
+                                    self.config.use_deep_exploration \
                                     and 'double_model_rnd' not in self.config.uncertainty_architecture_type:
                                 try:
                                     self.evaluate_uncertainty(model=model, step_count=total_transitions)
@@ -817,13 +820,20 @@ class DataWorker(object):
         batch_size = env_size * env_size
 
         batched_obs = []
+        initial_observations_for_counter = []
         for i in range(env_size):
             for j in range(env_size):
                 current_obs = np.zeros(shape=(env_size, env_size))
                 current_obs[i, j] = 1
                 stack_obs = current_obs[np.newaxis, :]
                 batched_obs.append(stack_obs)
+                initial_observations_for_counter.append((i, j))
         batched_obs = np.asarray(batched_obs)
+        # Shape is [env_size*env_size, 1, env_size, env_size]
+        # if self.config.plan_with_visitation_counter and self.visitation_counter is not None:
+        #     initial_observations_for_counter = self.visitation_counter.from_one_hot_state_to_indexes(
+        #         np.array(batched_obs, dtype=np.uint8)[:, -1, :, :])
+        #     print(f"Why is it crashing? Did it survive the translation from one-hot to n by n?")
         stack_obs = torch.from_numpy(batched_obs).to(self.device).float()
 
         # Call env_size * env_size MCTS in parallel.
@@ -850,7 +860,19 @@ class DataWorker(object):
 
             roots = cytree.Roots(batch_size, self.config.action_space_size, self.config.num_simulations_ube)
             roots.prepare(self.config.root_exploration_fraction, noises, value_prefix_variance_pool, policy_logits_pool)
-            MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots,
+
+            if self.config.plan_with_visitation_counter and self.visitation_counter is not None:
+                # If we plan with a visitation counter for MuExplore (only implemented for deep_sea)
+                MCTS(self.config).search_w_visitation_counter(roots, model, hidden_state_roots,
+                                                              reward_hidden_roots,
+                                                              visitation_counter=self.visitation_counter,
+                                                              initial_observation_roots=initial_observations_for_counter,
+                                                              use_state_visits=self.config.plan_with_state_visits,
+                                                              sampling_times=self.config.sampling_times,
+                                                              debug=True,
+                                                              propagating_uncertainty=True)
+            else:
+                MCTS(self.config).search(roots, model, hidden_state_roots, reward_hidden_roots,
                                      propagating_uncertainty=True)
 
             roots_distributions = roots.get_distributions()

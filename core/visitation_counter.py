@@ -2,7 +2,8 @@ import numpy as np
 import torch
 from bsuite import sweep
 # from bsuite.environments.deep_sea import DeepSea
-from config.deepsea.extended_deep_sea import DeepSea
+# from config.deepsea.extended_deep_sea import DeepSea
+from additional_envs.extended_deep_sea import DeepSea
 import traceback
 
 # Taken from Wendelin's implementation in the DRL HW explore

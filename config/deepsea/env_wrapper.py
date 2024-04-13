@@ -41,3 +41,6 @@ class DeepSeaWrapper(Game):
 
     def close(self):
         self.env.close()
+
+    def get_true_return(self):
+        return self.env.current_denoised_return

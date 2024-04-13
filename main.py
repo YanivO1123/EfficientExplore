@@ -97,7 +97,9 @@ if __name__ == '__main__':
     parser.add_argument('--number_of_exploratory_envs', type=int, default=None, help='If MuExplore, number of environments <= p_mcts_num that'
                                                                                      'are exploratory')
     parser.add_argument('--det_deepsea_actions', action='store_true', default=False,
-                        help="If true, use determinstic deep sea actions ")
+                        help="If true, use deterministic deep sea actions ")
+    parser.add_argument('--stochastic_deepsea_rewards', action='store_true', default=False,
+                        help="If true, use stochastic deep sea rewards. Transitions remain stochastic.")
     parser.add_argument('--sampling_times', type=int, default=30, help='If MuExplore and visitation counter, '
                                                                       'whether to use the sampled value '
                                                                       'propagation or not. Defaults to not')
@@ -183,7 +185,7 @@ if __name__ == '__main__':
             model, weights = train(game_config, summary_writer, model_path)
             model.set_weights(weights)
             total_steps = game_config.training_steps + game_config.last_steps
-            test_score, _, test_path = test(game_config, model.to(device), total_steps, game_config.test_episodes, device, render=False, save_video=args.save_video, final_test=True, use_pb=True)
+            test_score, _, test_path, _ = test(game_config, model.to(device), total_steps, game_config.test_episodes, device, render=False, save_video=args.save_video, final_test=True, use_pb=True)
             mean_score = test_score.mean()
             std_score = test_score.std()
 
@@ -209,7 +211,7 @@ if __name__ == '__main__':
 
             model = game_config.get_uniform_network().to(device)
             model.load_state_dict(torch.load(model_path, map_location=torch.device(device)))
-            test_score, _, test_path = test(game_config, model, 0, args.test_episodes, device=device, render=args.render, save_video=args.save_video, final_test=True, use_pb=True)
+            test_score, _, test_path, _ = test(game_config, model, 0, args.test_episodes, device=device, render=args.render, save_video=args.save_video, final_test=True, use_pb=True)
             mean_score = test_score.mean()
             std_score = test_score.std()
             logging.getLogger('test').info('Test Mean Score: {} (max: {}, min: {})'.format(mean_score, test_score.max(), test_score.min()))

@@ -8,7 +8,8 @@ import torch.nn as nn
 
 from core.model import BaseNet
 
-from config.deepsea.extended_deep_sea import DeepSea
+# from config.deepsea.extended_deep_sea import DeepSea
+from additional_envs.extended_deep_sea import DeepSea
 import itertools
 
 
@@ -931,6 +932,14 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         rows, columns = (flattened_batched_states.argmax(dim=1) // N).long().squeeze(-1).to(batched_states.device), (
                 flattened_batched_states.argmax(dim=1) % N).long().squeeze(-1).to(batched_states.device)
 
+        # If last row, don't change positions
+        last_rows = torch.zeros_like(rows).to(batched_states.device).long()
+        # Keep the indexes of all rows that are the last row
+        last_rows[rows == self.env_size - 1] = 1
+        last_rows = last_rows.long()
+        # keep the old indexes of columns
+        old_columns = columns.clone().long()
+
         # Switch actions to -1, +1
         batched_actions = batched_actions.squeeze(-1) * 2 - 1
 
@@ -949,19 +958,23 @@ class FullyConnectedDynamicsNetwork(nn.Module):
         actions_right = flattened_action_mapping.take(flattened_indexes).to(batched_states.device)
 
         # All states go down 1 row
-        rows = rows + 1
+        rows = (rows + 1).long()
 
         # Change the actions right from which action is right to what needs to happen to column.
         # This is done by -1 * -1 = move one to the right, -1 * 1 = move 1 to the left
         change_in_column = (actions_right * batched_actions).to(batched_states.device)
 
         # Change the column values
-        columns = torch.clip(columns + change_in_column, min=0).to(batched_states.device)
+        columns = torch.clip(columns + change_in_column, min=0).to(batched_states.device).long()
+
+        # Update the rows and columns with last-states that should not have changed
+        columns[last_rows == 1] = old_columns[last_rows == 1]
+        rows[last_rows == 1] = self.env_size - 1
 
         # 1-hot the rows and column back into a tensor for shape [B, (N + 1) x (N + 1)]
         flattened_batched_next_states = torch.zeros(size=(batch_size, (N + 1) * (N + 1))) \
             .to(batched_states.device) \
-            .scatter_(dim=-1, index=rows.unsqueeze(-1) * (N + 1) + columns.unsqueeze(-1), value=1)
+            .scatter_(dim=-1, index=rows.unsqueeze(-1).long() * (N + 1) + columns.unsqueeze(-1).long(), value=1)
 
         # Reshape tensor back to B, 1, (N + 1), (N + 1)
         batched_next_states = flattened_batched_next_states.reshape(shape=(batch_size, N + 1, N + 1)).unsqueeze(1)

@@ -7,7 +7,9 @@ import random
 import shutil
 import logging
 import numpy as np
-from bsuite.environments.deep_sea import DeepSea
+# from bsuite.environments.deep_sea import DeepSea
+# from config.deepsea.extended_deep_sea import DeepSea
+from additional_envs.extended_deep_sea import DeepSea
 from bsuite import sweep
 from bsuite.utils import gym_wrapper as bsuite_gym_wrapper
 
@@ -250,10 +252,11 @@ def make_atari(env_id, skip=4, max_episode_steps=None):
     return env
 
 
-def make_deepsea(env_id, seed, randomize_actions):
+def make_deepsea(env_id, seed, randomize_actions, stochastic_reward=False):
     # env = bsuite.load_from_id(env_id)
     size = sweep.SETTINGS[env_id]['size']
-    env = DeepSea(size=size, mapping_seed=seed, seed=seed, randomize_actions=randomize_actions)
+    env = DeepSea(size=size, mapping_seed=seed, seed=seed, randomize_actions=randomize_actions,
+                  stochastic_reward=stochastic_reward)
     env = bsuite_gym_wrapper.GymFromDMEnv(env)
     return env
 

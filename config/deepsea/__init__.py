@@ -14,7 +14,7 @@ from core.utils import init_kaiming_trunc_haiku
 class DeepSeaConfig(BaseConfig):
     def __init__(self):
         super(DeepSeaConfig, self).__init__(
-            training_steps=50 * 1000, #100000,
+            training_steps=45 * 1000, #100000,
             last_steps=0,#20000
             test_interval=100, #10000, 500
             log_interval=100,
@@ -44,12 +44,12 @@ class DeepSeaConfig(BaseConfig):
             lr_warm_up=0.01,
             lr_init=0.5 * 1E-3,    # torch_amp=0.2, none=1E-3,
             lr_decay_rate=0.1,     # 0.1
-            lr_decay_steps=50 * 1000,
+            lr_decay_steps=45 * 1000,
             num_unroll_steps=5, # 5, 10    The hardcoded default is 5. Might not work reliably with other values
             auto_td_steps_ratio=0.3,    # 0.3, 0.1
             # replay window
             start_transitions=300,   # 500 400 32 5000 1000
-            total_transitions=50 * 1000,
+            total_transitions=45 * 1000,
             transition_num=1,
             do_consistency=False,
             # frame skip & stack observation
@@ -120,8 +120,8 @@ class DeepSeaConfig(BaseConfig):
 
         self.reset_all_weights = True
 
-        self.evaluate_uncertainty = True
-        self.evaluate_uncertainty_at = [100, 1000, 5000, 10000, 15000, 20000]
+        self.evaluate_uncertainty = True # True
+        self.evaluate_uncertainty_at = [100, 500, 1000, 2000, 3000, 5000, 7500, 10000, 12500, 15000, 20000]
 
         self.representation_based_training = False   # For deep sea, changes muzero training to be based on
 
@@ -156,8 +156,10 @@ class DeepSeaConfig(BaseConfig):
         else:
             return 1.0
 
-    def set_game(self, env_name, save_video=False, save_path=None, video_callable=None, dimensions=9):
+    def set_game(self, env_name, save_video=False, save_path=None, video_callable=None, dimensions=9,
+                 stochastic_reward=False):
         self.env_name = env_name
+        self.stochastic_reward = stochastic_reward
         self.env_size = sweep.SETTINGS[env_name]['size']
         self.image_channel = 1
         obs_shape = (self.image_channel, self.env_size, self.env_size)
@@ -255,7 +257,8 @@ class DeepSeaConfig(BaseConfig):
                  final_test=False):
         # We make all deep_sea envs with the same action mapping seed, which is the seed of the config
         # The input seed can be used to init the rest of the env (for stoch. deepsea)
-        env = make_deepsea(self.env_name, seed=self.seed, randomize_actions=self.deepsea_randomize_actions)
+        env = make_deepsea(self.env_name, seed=self.seed, randomize_actions=self.deepsea_randomize_actions,
+                           stochastic_reward=self.stochastic_reward)
 
         if save_video:
             print("Does not have save_video option in deep_sea, proceeding without")

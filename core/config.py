@@ -406,6 +406,7 @@ class BaseConfig(object):
 
         # Deep sea specific hyper parameters
         self.deepsea_randomize_actions = True
+        self.stochastic_reward = False
         self.learned_model = True
         self.env_size = -1  # reset in set_game
         self.sampling_times = sampling_times
@@ -413,6 +414,7 @@ class BaseConfig(object):
         self.representation_based_training = False
         self.evaluate_uncertainty = False
         self.evaluate_uncertainty_at = []
+        self.stochastic_reward = False
 
     def visit_softmax_temperature_fn(self, num_moves, trained_steps):
         raise NotImplementedError
@@ -578,7 +580,10 @@ class BaseConfig(object):
                 self.representation_based_training = False
 
             self.deepsea_randomize_actions = not args.det_deepsea_actions
+            self.stochastic_reward = args.stochastic_deepsea_rewards
 
+            # if self.learned_model and 'double_model_rnd_ube' in args.uncertainty_architecture_type:
+            #     self.rnd_scale = 0.01
             if self.learned_model:
                 self.rnd_scale = 0.001
             else:

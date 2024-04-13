@@ -98,6 +98,7 @@ class DeepSea(base.Environment):
     self._total_bad_episodes = 0
     self._denoised_return = 0
     self._reset()
+    self.current_denoised_return = 0
 
     # bsuite experiment length.
     self.bsuite_num_episodes = sweep.NUM_EPISODES
@@ -113,6 +114,7 @@ class DeepSea(base.Environment):
     self._row = 0
     self._column = 0
     self._bad_episode = False
+    self.current_denoised_return = 0
     return dm_env.restart(self._get_observation())
 
   def _step(self, action: int) -> dm_env.TimeStep:
@@ -123,6 +125,7 @@ class DeepSea(base.Environment):
     if self._column == self._size - 1 and action_right:
       reward += 1.
       self._denoised_return += 1.
+      self.current_denoised_return += 1.0
     if not self._deterministic or self._stochastic_reward:  # Noisy rewards on the 'end' of chain.
       if self._row == self._size - 1 and self._column in [0, self._size - 1]:
         reward += self._rng.randn()

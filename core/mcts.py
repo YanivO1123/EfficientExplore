@@ -257,6 +257,8 @@ class MCTS(object):
                     value_variance_pool = visitation_counter.get_surface_value_uncertainty(true_observations,
                                                                                               use_state_visits=use_state_visits)
                     value_variance_pool = np.maximum(value_variance_pool, network_output.value_variance.reshape(-1)).tolist()
+                    assert value_prefix_variance_pool is not None and value_variance_pool is not None
+
                 # Otherwise, if we use visitation counter use propagated value unc. estimate from the visitation count
                 elif self.config.plan_with_visitation_counter:
                     value_prefix_variance_pool = visitation_counter.get_reward_uncertainty(true_observations,
