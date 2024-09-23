@@ -888,6 +888,9 @@ class DataWorker(object):
             state_uncertainties = np.asarray(roots_uncertainties).reshape(env_size, env_size)
             state_action_uncertainties = np.asarray(children_uncertainties).reshape(env_size, env_size,
                                                                                     self.config.action_space_size)
+
+            ube_state_uncertainties = np.asarray(network_output.value_variance).reshape(env_size, env_size)
+            print(f"Inside evaluate uncerrtainty, ube_states_unc saves as array")
         else:
             state_uncertainties = network_output.value_variance.reshape(env_size, env_size)
 
@@ -921,6 +924,8 @@ class DataWorker(object):
                                                       network_output_action_one.value_variance.reshape(env_size, env_size)),
                                                      axis=-1)
 
+            ube_state_uncertainties = state_uncertainties
+
         assert np.shape(state_action_uncertainties) == (env_size, env_size, 2) and \
                np.shape(state_uncertainties) == (env_size, env_size), f"state_action_uncertainties shape is " \
                                                                       f"{np.shape(state_action_uncertainties)} " \
@@ -931,6 +936,7 @@ class DataWorker(object):
 
         # save the uncertainties.
         np.save(self.config.exp_path + f"/state_uncertainties_transition_{step_count}", state_uncertainties)
+        np.save(self.config.exp_path + f"/ube_state_uncertainties_transition_{step_count}", ube_state_uncertainties)
         np.save(self.config.exp_path + f"/state_action_uncertainties_transition_{step_count}", state_action_uncertainties)
         print(f"In dataworker, in function evaluate_uncertainty, at transition {step_count}. Finished uncertainty "
               f"evaluation!")
